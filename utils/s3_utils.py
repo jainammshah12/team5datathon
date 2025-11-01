@@ -53,6 +53,8 @@ def upload_file_to_s3(file_content: bytes, key: str) -> None:
         raise ConnectionError("S3 not configured. Please check AWS credentials in .env file.")
     s3_client.put_object(Bucket=bucket_name, Key=key, Body=file_content)
 
+
+
 def list_files_in_s3(prefix: str) -> list:
     """List all files in S3 with the given prefix."""
     if s3_client is None:
