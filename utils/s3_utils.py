@@ -13,10 +13,21 @@ bucket_name = os.getenv('S3_BUCKET_NAME')
 aws_session_token = os.getenv('AWS_SESSION_TOKEN')
 
 try:
-    # Create S3 client with session token support (for temporary credentials)
+    # Get AWS credentials from environment
+    aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+    aws_region = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+    
+    # Create S3 client with explicit credentials
     client_config = {
-        'service_name': 's3'
+        'service_name': 's3',
+        'region_name': aws_region,
     }
+    
+    # Use explicit credentials if available (more reliable)
+    if aws_access_key and aws_secret_key:
+        client_config['aws_access_key_id'] = aws_access_key
+        client_config['aws_secret_access_key'] = aws_secret_key
     
     # Add session token if present (required for temporary credentials like AWS SSO)
     if aws_session_token:
@@ -24,11 +35,16 @@ try:
         print(f"[INFO] Using temporary AWS credentials (with session token)")
     
     s3_client = boto3.client(**client_config)
-    print(f"[INFO] S3 client initialized for bucket: {bucket_name}")
+    
+    if bucket_name:
+        print(f"[INFO] S3 client initialized for bucket: {bucket_name}")
+    else:
+        print(f"[WARNING] S3 client initialized but S3_BUCKET_NAME not set")
 except Exception as e:
     s3_client = None
     print(f"[ERROR] S3 client not initialized: {e}")
     print("[ERROR] Please configure AWS credentials in .env file")
+    print("[ERROR] Run 'python test_env_credentials.py' to diagnose issues")
 
 def read_csv_from_s3(key: str) -> pd.DataFrame:
     """Read a CSV file from S3 and return as pandas DataFrame."""

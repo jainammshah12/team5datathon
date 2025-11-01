@@ -3,7 +3,6 @@ import gradio as gr
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import json
-import os
 
 # Import utility modules
 from utils.s3_utils import (
@@ -11,9 +10,7 @@ from utils.s3_utils import (
     get_stock_performance,
     get_available_directives,
     get_available_filings,
-    read_file_from_s3,
-    check_file_exists_in_s3,
-    upload_file_to_s3
+    read_file_from_s3
 )
 from utils.document_processor import (
     extract_text_from_html,
@@ -21,6 +18,22 @@ from utils.document_processor import (
     clean_text,
     extract_metadata
 )
+from utils.portfolio_manager import (
+    parse_portfolio_csv,
+    parse_portfolio_manual,
+    validate_portfolio,
+    portfolio_to_dataframe,
+    get_portfolio_summary
+)
+from utils.portfolio_storage import (
+    load_portfolio_from_s3,
+    save_portfolio_to_s3,
+    list_portfolios_in_s3,
+    add_portfolio_entry,
+    calculate_portfolio_value,
+    get_portfolio_key
+)
+from utils.yfinance_fetcher import fetch_daily_stock_data
 from llm.llm_client import get_llm_client
 
 # Initialize LLM client
@@ -31,28 +44,30 @@ _sp500_data = None
 _stock_performance = None
 
 def load_sp500_data() -> pd.DataFrame:
-    """Load S&P 500 companies data from S3 (cached)."""
+    """Load S&P 500 companies data (cached)."""
     global _sp500_data
     if _sp500_data is None:
         try:
             _sp500_data = get_sp500_companies()
         except Exception as e:
+            # Return error DataFrame
             return pd.DataFrame({
-                "Error": [f"⚠️ Failed to load S&P 500 data from S3: {str(e)}"],
-                "Solution": ["Please check AWS credentials in .env file"]
+                "Error": [f"⚠️ Failed to load S&P 500 data: {str(e)}"],
+                "Solution": ["Please check AWS credentials in .env file or ensure local data/ folder exists"]
             })
     return _sp500_data
 
 def load_stock_performance() -> pd.DataFrame:
-    """Load stock performance data from S3 (cached)."""
+    """Load stock performance data (cached)."""
     global _stock_performance
     if _stock_performance is None:
         try:
             _stock_performance = get_stock_performance()
         except Exception as e:
+            # Return error DataFrame
             return pd.DataFrame({
-                "Error": [f"⚠️ Failed to load stock performance data from S3: {str(e)}"],
-                "Solution": ["Please check AWS credentials in .env file"]
+                "Error": [f"⚠️ Failed to load stock performance data: {str(e)}"],
+                "Solution": ["Please check AWS credentials in .env file or ensure local data/ folder exists"]
             })
     return _stock_performance
 
@@ -60,103 +75,14 @@ def get_directive_list() -> List[str]:
     """Get list of available directives from S3."""
     try:
         directives = get_available_directives()
-        filtered = [d for d in directives if '.' in d.split('/')[-1] and 'README' not in d]
-        
-        if not filtered:
-            return ["⚠️ No directives found in S3 bucket."]
-        
-        print(f"[INFO] Successfully loaded {len(filtered)} directives from S3")
-        return filtered
-    except ConnectionError as e:
-        print(f"[ERROR] S3 connection failed: {e}")
-        return [f"⚠️ S3 Error: {str(e)}"]
+        # Filter to show only actual files (not directories)
+        return [d for d in directives if '.' in d.split('/')[-1] and 'README' not in d]
     except Exception as e:
-        print(f"[ERROR] Could not load directives: {e}")
-        return [f"⚠️ Error: {str(e)}"]
-
-def upload_document_to_s3(file) -> Tuple[gr.Dropdown, str, str]:
-    """
-    Upload a document to S3 and return updated dropdown, document text, and metadata.
-    
-    Args:
-        file: Gradio File object
-        
-    Returns:
-        Tuple of (updated dropdown, document text, metadata)
-    """
-    try:
-        if file is None:
-            return gr.update(), "", "⚠️ No file selected for upload."
-        
-        # Get file details
-        file_path = file.name
-        file_name = os.path.basename(file_path)
-        
-        # Validate file type
-        valid_extensions = ['.html', '.xml', '.txt', '.md']
-        file_ext = os.path.splitext(file_name)[1].lower()
-        if file_ext not in valid_extensions:
-            return gr.update(), "", f"⚠️ Invalid file type. Please upload: {', '.join(valid_extensions)}"
-        
-        print(f"[INFO] Starting upload: {file_name}")
-        
-        # Read file content
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-        
-        file_size = len(file_content)
-        print(f"[INFO] File size: {file_size} bytes")
-        
-        # Determine S3 key (upload to data/directives/)
-        s3_key = f"data/directives/{file_name}"
-        
-        # Check if file already exists
-        file_exists = check_file_exists_in_s3(s3_key)
-        
-        if file_exists:
-            print(f"[INFO] File already exists, will be overwritten: {s3_key}")
-        
-        print(f"[INFO] Uploading to S3: {s3_key}")
-        
-        # Upload to S3 (will automatically overwrite if exists)
-        upload_file_to_s3(file_content, s3_key, overwrite=True)
-        
-        action = "replaced" if file_exists else "uploaded"
-        print(f"[INFO] ✅ File successfully {action}: {file_name}")
-        
-        # Refresh directive list
-        print(f"[INFO] Refreshing directive list...")
-        updated_directives = get_directive_list()
-        
-        # Load the uploaded document
-        print(f"[INFO] Loading uploaded document...")
-        doc_text, doc_metadata = load_document(s3_key)
-        
-        # Enhanced success message with metadata
-        status_icon = "🔄" if file_exists else "✅"
-        status_text = "replaced" if file_exists else "uploaded"
-        success_msg = f"{status_icon} **Successfully {status_text}:** {file_name}\n📦 **Size:** {file_size:,} bytes\n🔗 **S3 Path:** {s3_key}\n\n{doc_metadata}"
-        
-        # Return updated dropdown with the new file selected
-        return (
-            gr.update(choices=updated_directives, value=s3_key),
-            doc_text,
-            success_msg
-        )
-        
-    except Exception as e:
-        error_msg = f"❌ **Upload failed:** {str(e)}\n\nPlease check:\n- AWS credentials are valid\n- You have s3:PutObject permission\n- File is not corrupted"
-        print(f"[ERROR] Upload failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return gr.update(), "", error_msg
+        return [f"Error loading directives: {str(e)}"]
 
 def load_document(document_path: str) -> Tuple[str, str]:
     """Load and process a document from S3."""
     try:
-        if not document_path:
-            return "", "Please select a document from the dropdown or upload a file."
-            
         content = read_file_from_s3(document_path)
         metadata = extract_metadata(document_path)
         
@@ -170,7 +96,7 @@ def load_document(document_path: str) -> Tuple[str, str]:
         
         text = clean_text(text)
         
-        # Format metadata only
+        # Format metadata
         metadata_str = f"**File:** {metadata['filename']}\n"
         if metadata['date']:
             metadata_str += f"**Date:** {metadata['date']}\n"
@@ -179,9 +105,11 @@ def load_document(document_path: str) -> Tuple[str, str]:
         if metadata['ticker']:
             metadata_str += f"**Ticker:** {metadata['ticker']}\n"
         
-        return text, metadata_str
+        preview = text[:1000] + "..." if len(text) > 1000 else text
+        
+        return text, metadata_str + f"\n**Preview:**\n{preview}"
     except Exception as e:
-        return "", f"❌ Error loading document: {str(e)}"
+        return "", f"Error loading document: {str(e)}"
 
 def analyze_document(document_text: str) -> str:
     """Analyze document and extract entities."""
@@ -241,21 +169,243 @@ def evaluate_impact(entities_json: str) -> str:
     except Exception as e:
         return f"Error evaluating impact: {str(e)}"
 
-def generate_portfolio_recommendations(impact_json: str) -> str:
-    """Generate portfolio adjustment recommendations."""
+def fetch_price_for_date(ticker: str, date: str) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Fetch historical stock price for a given date.
+    
+    Args:
+        ticker: Stock symbol
+        date: Date in YYYY-MM-DD format
+    
+    Returns:
+        Tuple of (price, error_message)
+    """
+    try:
+        # Fetch data for the date (use a small range around the date)
+        from datetime import datetime, timedelta
+        date_obj = datetime.strptime(date, '%Y-%m-%d')
+        start_date = (date_obj - timedelta(days=5)).strftime('%Y-%m-%d')
+        end_date = (date_obj + timedelta(days=5)).strftime('%Y-%m-%d')
+        
+        # Fetch data
+        data = fetch_daily_stock_data(ticker, start_date, end_date)
+        
+        if data.empty:
+            return None, f"No data found for {ticker} around {date}"
+        
+        # Find closest date
+        # Convert Date column to datetime if needed
+        if data['Date'].dtype == 'object':
+            data['Date'] = pd.to_datetime(data['Date'])
+        target_date = pd.to_datetime(date)
+        
+        # Get closest date
+        data['date_diff'] = abs(pd.to_datetime(data['Date']) - target_date)
+        closest_row = data.loc[data['date_diff'].idxmin()]
+        
+        price = float(closest_row['Close'])
+        
+        return price, None
+        
+    except Exception as e:
+        return None, f"Error fetching price: {str(e)}"
+
+
+def add_stock_to_portfolio(
+    ticker: str,
+    quantity: int,
+    date_bought: str,
+    price: float,
+    current_portfolio_df: pd.DataFrame
+) -> Tuple[str, pd.DataFrame]:
+    """
+    Add a stock entry to the portfolio.
+    Either date_bought OR price must be provided (not both required).
+    If date is provided, fetches historical price automatically.
+    
+    Returns:
+        Tuple of (status_message, updated_dataframe)
+    """
+    if not ticker or not quantity:
+        return "⚠️ Please provide ticker and quantity", current_portfolio_df
+    
+    # Validate that either date or price is provided (but not necessarily both)
+    has_date = date_bought and date_bought.strip()
+    has_price = price and price > 0
+    
+    if not has_date and not has_price:
+        return "⚠️ Please provide either purchase date OR price", current_portfolio_df
+    
+    try:
+        # Validate inputs
+        ticker = ticker.upper().strip()
+        quantity = int(quantity)
+        
+        if quantity <= 0:
+            return "❌ Quantity must be greater than 0", current_portfolio_df
+        
+        # Fetch price if date is provided
+        final_price = None
+        if has_date:
+            fetched_price, error = fetch_price_for_date(ticker, date_bought)
+            if error:
+                return f"❌ {error}", current_portfolio_df
+            final_price = fetched_price
+            final_date = date_bought
+        else:
+            # Use provided price
+            final_price = float(price)
+            # Use today's date if no date provided
+            from datetime import datetime
+            final_date = datetime.now().strftime('%Y-%m-%d')
+        
+        if final_price <= 0:
+            return "❌ Price must be greater than 0", current_portfolio_df
+        
+        # Add entry
+        updated_df = add_portfolio_entry(ticker, final_price, quantity, final_date, current_portfolio_df)
+        
+        if has_date:
+            return f"✅ Added {quantity} shares of {ticker} @ ${final_price:.2f} (price on {final_date})", updated_df
+        else:
+            return f"✅ Added {quantity} shares of {ticker} @ ${final_price:.2f}", updated_df
+        
+    except ValueError as e:
+        return f"❌ Invalid input: {str(e)}", current_portfolio_df
+    except Exception as e:
+        return f"❌ Error: {str(e)}", current_portfolio_df
+
+
+def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame) -> str:
+    """
+    Save current portfolio to S3.
+    
+    Returns:
+        Status message
+    """
+    if portfolio_df is None or len(portfolio_df) == 0:
+        return "⚠️ Portfolio is empty. Add some stocks first."
+    
+    try:
+        success, error = save_portfolio_to_s3(portfolio_df)
+        
+        if success:
+            return f"✅ Portfolio saved to S3 successfully! ({len(portfolio_df)} holdings)"
+        else:
+            return f"❌ Failed to save portfolio: {error}"
+    except Exception as e:
+        return f"❌ Error saving to S3: {str(e)}"
+
+
+def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
+    """
+    Load portfolio from S3.
+    
+    Returns:
+        Tuple of (DataFrame, status_message)
+    """
+    if not filename or filename == "Select a portfolio...":
+        return pd.DataFrame(), ""
+    
+    try:
+        df, error = load_portfolio_from_s3(filename)
+        
+        if df is not None and len(df) > 0:
+            return df, f"✅ Loaded portfolio '{filename}' with {len(df)} holdings"
+        else:
+            return pd.DataFrame(), f"⚠️ Portfolio '{filename}' is empty or not found"
+    except Exception as e:
+        return pd.DataFrame(), f"❌ Error loading portfolio: {str(e)}"
+
+
+def upload_portfolio_csv(file) -> Tuple[str, pd.DataFrame, str]:
+    """
+    Handle CSV file upload for portfolio.
+    
+    Returns:
+        Tuple of (status_message, portfolio_df, portfolio_json)
+    """
+    if file is None:
+        return "❌ No file uploaded", pd.DataFrame(), ""
+    
+    try:
+        # Handle both filepath string and file object
+        file_path = file if isinstance(file, str) else file.name
+        
+        # Read file content
+        with open(file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+        
+        # Parse portfolio
+        portfolio, error = parse_portfolio_csv(file_content)
+        
+        if error:
+            return f"❌ {error}", pd.DataFrame(), ""
+        
+        # Validate
+        is_valid, validation_error = validate_portfolio(portfolio)
+        if not is_valid:
+            return f"❌ Validation error: {validation_error}", pd.DataFrame(), ""
+        
+        # Convert to DataFrame
+        df = portfolio_to_dataframe(portfolio)
+        portfolio_json = json.dumps(portfolio)
+        
+        return f"✅ Portfolio uploaded successfully! {len(portfolio['holdings'])} holdings loaded.", df, portfolio_json
+        
+    except Exception as e:
+        return f"❌ Error uploading portfolio: {str(e)}", pd.DataFrame(), ""
+
+
+def upload_portfolio_manual(portfolio_text: str) -> Tuple[str, pd.DataFrame, str]:
+    """
+    Handle manual text input for portfolio.
+    
+    Returns:
+        Tuple of (status_message, portfolio_df, portfolio_json)
+    """
+    if not portfolio_text or not portfolio_text.strip():
+        return "⚠️ Please enter portfolio holdings", pd.DataFrame(), ""
+    
+    try:
+        # Parse portfolio
+        portfolio, error = parse_portfolio_manual(portfolio_text)
+        
+        if error:
+            return f"❌ {error}", pd.DataFrame(), ""
+        
+        # Validate
+        is_valid, validation_error = validate_portfolio(portfolio)
+        if not is_valid:
+            return f"❌ Validation error: {validation_error}", pd.DataFrame(), ""
+        
+        # Convert to DataFrame
+        df = portfolio_to_dataframe(portfolio)
+        portfolio_json = json.dumps(portfolio)
+        
+        return f"✅ Portfolio loaded successfully! {len(portfolio['holdings'])} holdings.", df, portfolio_json
+        
+    except Exception as e:
+        return f"❌ Error loading portfolio: {str(e)}", pd.DataFrame(), ""
+
+
+def generate_portfolio_recommendations(impact_json: str, portfolio_json: str) -> str:
+    """Generate portfolio adjustment recommendations based on user's portfolio."""
+    if not portfolio_json:
+        return "⚠️ Please upload or enter your portfolio first."
+    
+    if not impact_json or impact_json.strip() == "":
+        return "⚠️ Please analyze a regulatory document first to see recommendations."
+    
     try:
         impact = json.loads(impact_json) if isinstance(impact_json, str) else impact_json
+        portfolio = json.loads(portfolio_json) if isinstance(portfolio_json, str) else portfolio_json
         
-        # Mock portfolio (replace with actual portfolio data)
-        portfolio = {
-            "holdings": [
-                {"ticker": "AAPL", "weight": 0.1},
-                {"ticker": "MSFT", "weight": 0.08},
-                {"ticker": "GOOGL", "weight": 0.07}
-            ]
-        }
-        
+        # Get recommendations using actual portfolio
         recommendations = llm_client.generate_recommendations(impact, portfolio)
+        
+        # Match recommendations with portfolio holdings
+        portfolio_tickers = {h['ticker']: h['weight'] for h in portfolio.get('holdings', [])}
         
         # Format output
         result = "## Portfolio Recommendations\n\n"
@@ -265,29 +415,50 @@ def generate_portfolio_recommendations(impact_json: str) -> str:
         if recommendations.get('recommendations'):
             result += "**Recommended Actions:**\n\n"
             for rec in recommendations['recommendations']:
-                result += f"**{rec.get('action', 'N/A').upper()}** {rec.get('ticker', 'N/A')}\n"
-                result += f"  Current: {rec.get('current_weight', 'N/A')}% → Recommended: {rec.get('recommended_weight', 'N/A')}%\n"
+                ticker = rec.get('ticker', 'N/A')
+                current_weight = portfolio_tickers.get(ticker, 0) * 100
+                result += f"**{rec.get('action', 'N/A').upper()}** {ticker}\n"
+                result += f"  Current: {current_weight:.2f}% → Recommended: {rec.get('recommended_weight', 'N/A')}%\n"
                 result += f"  Reason: {rec.get('reason', 'N/A')}\n\n"
+        else:
+            result += "No specific recommendations at this time. Monitor regulatory developments.\n"
         
         return result
     except Exception as e:
         return f"Error generating recommendations: {str(e)}"
 
-def run_simulation(scenario_config: str) -> str:
-    """Run portfolio simulation."""
+def run_simulation(portfolio_json: str) -> str:
+    """Run portfolio simulation with regulatory impacts."""
+    if not portfolio_json:
+        return "⚠️ Please upload or enter your portfolio first."
+    
     try:
-        # Mock scenario (replace with actual input)
-        scenarios = [{"name": "Baseline"}, {"name": "Regulatory Impact"}]
-        portfolio = {"holdings": []}
+        portfolio = json.loads(portfolio_json) if isinstance(portfolio_json, str) else portfolio_json
+        
+        # Define scenarios
+        scenarios = [
+            {"name": "Baseline (No Regulatory Impact)"},
+            {"name": "Regulatory Impact Applied"},
+            {"name": "Moderate Compliance Costs"}
+        ]
         
         simulation_results = llm_client.run_simulation(portfolio, scenarios)
         
         # Format output
-        result = "## Simulation Results\n\n"
+        result = "## Portfolio Simulation Results\n\n"
+        result += f"**Portfolio Holdings:** {len(portfolio.get('holdings', []))} positions\n\n"
+        
         for scenario in simulation_results.get('scenarios', []):
-            result += f"**{scenario.get('name', 'Unknown')}:**\n"
-            result += f"  Expected Return: {scenario.get('expected_return', 'N/A')}\n"
-            result += f"  Portfolio Value Change: {scenario.get('portfolio_value_change', 'N/A')}\n\n"
+            result += f"### {scenario.get('name', 'Unknown')}\n"
+            result += f"- Expected Return: {scenario.get('expected_return', 'N/A')}\n"
+            result += f"- Portfolio Value Change: {scenario.get('portfolio_value_change', 'N/A')}\n"
+            
+            if scenario.get('risk_metrics'):
+                risk = scenario['risk_metrics']
+                result += f"- Volatility: {risk.get('volatility', 'N/A')}\n"
+                result += f"- Sharpe Ratio: {risk.get('sharpe_ratio', 'N/A')}\n"
+            
+            result += "\n"
         
         return result
     except Exception as e:
@@ -305,20 +476,12 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 with gr.Column():
                     gr.Markdown("### Select or Upload Document")
                     document_selector = gr.Dropdown(
-                        choices=[],  # Will be auto-populated on page load
+                        choices=get_directive_list(),
                         label="Available Regulatory Documents (from S3)",
                         interactive=True
                     )
-                    refresh_btn = gr.Button("🔄 Refresh Document List", size="sm")
-                    
-                    gr.Markdown("### Upload New Document")
-                    document_file = gr.File(
-                        label="Upload Document (.html, .xml, .txt)",
-                        file_types=[".html", ".xml", ".txt", ".md"]
-                    )
-                    upload_btn = gr.Button("📤 Upload to S3", variant="secondary")
-                    
-                    load_btn = gr.Button("Load Selected Document", variant="primary")
+                    document_file = gr.File(label="Or Upload New Document")
+                    load_btn = gr.Button("Load Document", variant="primary")
                     
                 with gr.Column():
                     gr.Markdown("### Document Preview")
@@ -331,38 +494,11 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     )
             
             def load_document_wrapper(path):
-                """Load document from selected path."""
                 if path:
                     return load_document(path)
                 else:
-                    return "", "⚠️ Please select a document from the dropdown."
+                    return "", "Please select a document from the dropdown or upload a new file."
             
-            def refresh_directives():
-                """Refresh the list of available directives."""
-                directives = get_directive_list()
-                print(f"[INFO] Refreshing dropdown with {len(directives)} directives")
-                return gr.update(choices=directives, value=None)
-            
-            # Auto-load directives when app starts
-            demo.load(
-                fn=refresh_directives,
-                outputs=document_selector
-            )
-            
-            # Refresh button - manually trigger list refresh
-            refresh_btn.click(
-                fn=refresh_directives,
-                outputs=document_selector
-            )
-            
-            # Upload button - upload file to S3 and auto-load it
-            upload_btn.click(
-                fn=upload_document_to_s3,
-                inputs=document_file,
-                outputs=[document_selector, document_preview, document_metadata]
-            )
-            
-            # Load document button - load selected document
             load_btn.click(
                 fn=load_document_wrapper,
                 inputs=document_selector,
@@ -394,28 +530,146 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 outputs=impact_output
             )
         
-        # Tab 3: Recommendations
+        # Tab 3: Portfolio
         with gr.Tab("💼 Portfolio"):
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("### Portfolio Recommendations")
-                    recommend_btn = gr.Button("Generate Recommendations", variant="primary")
-                    recommendations_output = gr.Markdown(label="Recommendations")
-                    
-                with gr.Column():
-                    gr.Markdown("### Simulation")
-                    simulate_btn = gr.Button("Run Simulation", variant="primary")
-                    simulation_output = gr.Markdown(label="Simulation Results")
+            # Portfolio state (stores DataFrame)
+            portfolio_df_state = gr.State(value=pd.DataFrame())
             
+            with gr.Row():
+                # Left column: Portfolio Management
+                with gr.Column(scale=1):
+                    gr.Markdown("### 📝 Manage Your Portfolio")
+                    
+                    # Load existing portfolio
+                    with gr.Accordion("📂 Load Existing Portfolio", open=False):
+                        portfolio_dropdown = gr.Dropdown(
+                            choices=["Select a portfolio..."] + list_portfolios_in_s3(),
+                            label="Select Portfolio from S3",
+                            value="Select a portfolio...",
+                            interactive=True
+                        )
+                        load_portfolio_btn = gr.Button("Load Portfolio", variant="secondary")
+                        load_portfolio_status = gr.Markdown()
+                    
+                    # Add new stock entry
+                    gr.Markdown("### ➕ Add Stock to Portfolio")
+                    gr.Markdown("**Provide either date OR price** (date will fetch historical price automatically)")
+                    with gr.Row():
+                        portfolio_ticker = gr.Textbox(
+                            label="Stock Symbol",
+                            placeholder="AAPL",
+                            scale=1
+                        )
+                        portfolio_quantity = gr.Number(
+                            label="Number of Shares",
+                            value=0,
+                            precision=0,
+                            scale=1
+                        )
+                    with gr.Row():
+                        portfolio_date = gr.Textbox(
+                            label="Date Bought (YYYY-MM-DD) - Optional",
+                            placeholder="2024-01-15",
+                            scale=1
+                        )
+                        portfolio_price = gr.Number(
+                            label="Price per Share ($) - Optional",
+                            value=0.0,
+                            scale=1
+                        )
+                    
+                    add_stock_btn = gr.Button("Add Stock", variant="primary")
+                    add_stock_status = gr.Markdown()
+                    
+                    # Save to S3
+                    save_to_s3_btn = gr.Button("💾 Save Portfolio to S3", variant="primary")
+                    save_to_s3_status = gr.Markdown()
+                
+                # Right column: Portfolio Display
+                with gr.Column(scale=1):
+                    gr.Markdown("### 📊 Your Portfolio Holdings")
+                    portfolio_display = gr.Dataframe(
+                        label="Portfolio",
+                        headers=["Ticker", "Price", "Quantity", "Date_Bought"],
+                        interactive=False,
+                        wrap=True
+                    )
+                    
+                    portfolio_summary = gr.Markdown()
+                    
+                    # Analysis section
+                    with gr.Accordion("📈 Analysis & Recommendations", open=False):
+                        gr.Markdown("Generate recommendations based on regulatory impact analysis.")
+                        recommend_btn = gr.Button("Generate Recommendations", variant="primary")
+                        recommendations_output = gr.Markdown(label="Recommendations")
+                        
+                        simulate_btn = gr.Button("Run Simulation", variant="secondary")
+                        simulation_output = gr.Markdown(label="Simulation Results")
+            
+            # Event handlers
+            # Load portfolio from dropdown
+            load_portfolio_btn.click(
+                fn=load_portfolio_from_s3_handler,
+                inputs=portfolio_dropdown,
+                outputs=[portfolio_display, load_portfolio_status]
+            ).then(
+                fn=lambda df: df,  # Update state
+                inputs=portfolio_display,
+                outputs=portfolio_df_state
+            )
+            
+            # Also load when dropdown changes
+            portfolio_dropdown.change(
+                fn=lambda filename: load_portfolio_from_s3_handler(filename) if filename and filename != "Select a portfolio..." else (pd.DataFrame(), ""),
+                inputs=portfolio_dropdown,
+                outputs=[portfolio_display, load_portfolio_status]
+            ).then(
+                fn=lambda df: df if isinstance(df, pd.DataFrame) else pd.DataFrame(),
+                inputs=portfolio_display,
+                outputs=portfolio_df_state
+            )
+            
+            # Add stock to portfolio
+            add_stock_btn.click(
+                fn=add_stock_to_portfolio,
+                inputs=[portfolio_ticker, portfolio_quantity, portfolio_date, portfolio_price, portfolio_df_state],
+                outputs=[add_stock_status, portfolio_display]
+            ).then(
+                fn=lambda df: df,
+                inputs=portfolio_display,
+                outputs=portfolio_df_state
+            ).then(
+                fn=lambda df: f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}" if len(df) > 0 else "Portfolio is empty.",
+                inputs=portfolio_df_state,
+                outputs=portfolio_summary
+            )
+            
+            # Save portfolio to S3
+            save_to_s3_btn.click(
+                fn=save_portfolio_to_s3_handler,
+                inputs=portfolio_df_state,
+                outputs=save_to_s3_status
+            ).then(
+                fn=lambda: ["Select a portfolio..."] + list_portfolios_in_s3(),
+                inputs=None,
+                outputs=portfolio_dropdown
+            )
+            
+            # Analysis handlers (convert portfolio_df to JSON format for compatibility)
             recommend_btn.click(
-                fn=generate_portfolio_recommendations,
-                inputs=impact_output,
+                fn=lambda df, impact: generate_portfolio_recommendations(
+                    impact,
+                    json.dumps({"holdings": df.to_dict('records')}) if len(df) > 0 else ""
+                ) if len(df) > 0 else "⚠️ Please add stocks to your portfolio first.",
+                inputs=[portfolio_df_state, impact_output],
                 outputs=recommendations_output
             )
             
             simulate_btn.click(
-                fn=run_simulation,
-                inputs=gr.Textbox(value="", visible=False),
+                fn=lambda df: run_simulation(
+                    json.dumps({"holdings": df.to_dict('records')}) if len(df) > 0 else ""
+                ),
+                inputs=portfolio_df_state,
                 outputs=simulation_output
             )
         
@@ -433,10 +687,8 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 interactive=False
             )
             
-            load_data_btn = gr.Button("Load Data", variant="primary")
-            
-            # Load data when button is clicked
-            load_data_btn.click(
+            # Load data when tab is opened
+            demo.load(
                 fn=lambda: (load_sp500_data(), load_stock_performance()),
                 outputs=[sp500_display, performance_display]
             )
