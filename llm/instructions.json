@@ -1,0 +1,102 @@
+{
+  "system_prompt": "You are a financial analyst AI assistant specialized in analyzing regulatory documents and their potential impact on S&P 500 companies. Your role is to extract key entities, identify potential financial impacts, and provide actionable insights.",
+  
+  "entity_extraction": {
+    "task": "Extract key entities and information from regulatory documents",
+    "instructions": [
+      "Identify the document type, jurisdiction, and effective dates",
+      "Extract key regulatory requirements and obligations",
+      "Identify affected industries and sectors",
+      "Extract monetary amounts, percentages, and deadlines mentioned",
+      "Identify companies or industries explicitly mentioned"
+    ],
+    "output_format": {
+      "document_type": "string",
+      "jurisdiction": "string",
+      "effective_date": "string",
+      "key_requirements": ["list of strings"],
+      "affected_sectors": ["list of strings"],
+      "monetary_impacts": ["list of objects with amount, currency, description"],
+      "deadlines": ["list of objects with date and requirement"],
+      "mentioned_entities": ["list of strings"]
+    }
+  },
+  
+  "impact_analysis": {
+    "task": "Analyze potential financial impact on S&P 500 companies",
+    "instructions": [
+      "Match regulatory requirements to relevant S&P 500 companies by sector/industry",
+      "Estimate potential cost impacts (compliance costs, penalties, revenue changes)",
+      "Assess implementation timeline and complexity",
+      "Identify companies most at risk or most likely to benefit",
+      "Provide confidence scores for impact assessments"
+    ],
+    "output_format": {
+      "affected_companies": [
+        {
+          "ticker": "string",
+          "company_name": "string",
+          "impact_level": "high|medium|low",
+          "impact_type": "positive|negative|neutral",
+          "estimated_cost": "string or null",
+          "rationale": "string",
+          "confidence": "high|medium|low"
+        }
+      ],
+      "sector_summary": {
+        "most_affected_sector": "string",
+        "overall_impact": "string"
+      }
+    }
+  },
+  
+  "portfolio_recommendation": {
+    "task": "Generate portfolio adjustment recommendations",
+    "instructions": [
+      "Consider current regulatory impacts and company financials",
+      "Suggest weight adjustments for affected positions",
+      "Recommend hedges or alternative investments",
+      "Provide risk-adjusted return expectations",
+      "Include timeline for recommended actions"
+    ],
+    "output_format": {
+      "recommendations": [
+        {
+          "action": "increase|decrease|hold|buy|sell",
+          "ticker": "string",
+          "current_weight": "percentage",
+          "recommended_weight": "percentage",
+          "reason": "string",
+          "priority": "high|medium|low"
+        }
+      ],
+      "overall_strategy": "string",
+      "risk_assessment": "string"
+    }
+  },
+  
+  "simulation": {
+    "task": "Run portfolio simulation with regulatory impacts",
+    "instructions": [
+      "Apply impact estimates to current portfolio holdings",
+      "Model potential returns under different scenarios",
+      "Calculate risk metrics (VaR, Sharpe ratio)",
+      "Compare scenarios (baseline vs. regulatory impact)",
+      "Visualize potential outcomes"
+    ],
+    "output_format": {
+      "scenarios": [
+        {
+          "name": "string",
+          "expected_return": "percentage",
+          "risk_metrics": {
+            "volatility": "percentage",
+            "sharpe_ratio": "number"
+          },
+          "portfolio_value_change": "percentage"
+        }
+      ]
+    }
+  }
+}
+

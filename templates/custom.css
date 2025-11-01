@@ -1,0 +1,135 @@
+/* Custom CSS for Gradio Application */
+
+/* Main container styling */
+.main-container {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+}
+
+/* Header styling */
+.header {
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.header h1 {
+    color: #333;
+    margin: 0;
+    font-size: 2em;
+}
+
+.header p {
+    color: #666;
+    margin: 10px 0 0 0;
+}
+
+/* Card styling for sections */
+.card {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 10px 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Button styling */
+button {
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+button:hover {
+    background: #764ba2;
+}
+
+/* Input field styling */
+input[type="text"],
+input[type="file"],
+select {
+    border: 2px solid #ddd;
+    border-radius: 5px;
+    padding: 8px;
+    font-size: 14px;
+    width: 100%;
+}
+
+input[type="text"]:focus,
+select:focus {
+    border-color: #667eea;
+    outline: none;
+}
+
+/* Output area styling */
+.output-area {
+    background: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    margin-top: 10px;
+    max-height: 500px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+}
+
+/* Status indicators */
+.status-success {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.status-error {
+    color: #dc3545;
+    font-weight: bold;
+}
+
+.status-warning {
+    color: #ffc107;
+    font-weight: bold;
+}
+
+/* Company/stock list styling */
+.stock-list {
+    list-style: none;
+    padding: 0;
+}
+
+.stock-item {
+    padding: 10px;
+    margin: 5px 0;
+    background: #f8f9fa;
+    border-left: 4px solid #667eea;
+    border-radius: 4px;
+}
+
+/* Impact indicator */
+.impact-high {
+    border-left-color: #dc3545;
+}
+
+.impact-medium {
+    border-left-color: #ffc107;
+}
+
+.impact-low {
+    border-left-color: #28a745;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .main-container {
+        padding: 10px;
+    }
+    
+    .header h1 {
+        font-size: 1.5em;
+    }
+}
+
