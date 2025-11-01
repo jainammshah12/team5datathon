@@ -3,6 +3,7 @@ import gradio as gr
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import json
+import os
 
 # Import utility modules
 from utils.s3_utils import (
@@ -10,7 +11,9 @@ from utils.s3_utils import (
     get_stock_performance,
     get_available_directives,
     get_available_filings,
-    read_file_from_s3
+    read_file_from_s3,
+    check_file_exists_in_s3,
+    upload_file_to_s3
 )
 from utils.document_processor import (
     extract_text_from_html,
@@ -28,30 +31,28 @@ _sp500_data = None
 _stock_performance = None
 
 def load_sp500_data() -> pd.DataFrame:
-    """Load S&P 500 companies data (cached)."""
+    """Load S&P 500 companies data from S3 (cached)."""
     global _sp500_data
     if _sp500_data is None:
         try:
             _sp500_data = get_sp500_companies()
         except Exception as e:
-            # Return error DataFrame
             return pd.DataFrame({
-                "Error": [f"⚠️ Failed to load S&P 500 data: {str(e)}"],
-                "Solution": ["Please check AWS credentials in .env file or ensure local data/ folder exists"]
+                "Error": [f"⚠️ Failed to load S&P 500 data from S3: {str(e)}"],
+                "Solution": ["Please check AWS credentials in .env file"]
             })
     return _sp500_data
 
 def load_stock_performance() -> pd.DataFrame:
-    """Load stock performance data (cached)."""
+    """Load stock performance data from S3 (cached)."""
     global _stock_performance
     if _stock_performance is None:
         try:
             _stock_performance = get_stock_performance()
         except Exception as e:
-            # Return error DataFrame
             return pd.DataFrame({
-                "Error": [f"⚠️ Failed to load stock performance data: {str(e)}"],
-                "Solution": ["Please check AWS credentials in .env file or ensure local data/ folder exists"]
+                "Error": [f"⚠️ Failed to load stock performance data from S3: {str(e)}"],
+                "Solution": ["Please check AWS credentials in .env file"]
             })
     return _stock_performance
 
@@ -59,14 +60,103 @@ def get_directive_list() -> List[str]:
     """Get list of available directives from S3."""
     try:
         directives = get_available_directives()
-        # Filter to show only actual files (not directories)
-        return [d for d in directives if '.' in d.split('/')[-1] and 'README' not in d]
+        filtered = [d for d in directives if '.' in d.split('/')[-1] and 'README' not in d]
+        
+        if not filtered:
+            return ["⚠️ No directives found in S3 bucket."]
+        
+        print(f"[INFO] Successfully loaded {len(filtered)} directives from S3")
+        return filtered
+    except ConnectionError as e:
+        print(f"[ERROR] S3 connection failed: {e}")
+        return [f"⚠️ S3 Error: {str(e)}"]
     except Exception as e:
-        return [f"Error loading directives: {str(e)}"]
+        print(f"[ERROR] Could not load directives: {e}")
+        return [f"⚠️ Error: {str(e)}"]
+
+def upload_document_to_s3(file) -> Tuple[gr.Dropdown, str, str]:
+    """
+    Upload a document to S3 and return updated dropdown, document text, and metadata.
+    
+    Args:
+        file: Gradio File object
+        
+    Returns:
+        Tuple of (updated dropdown, document text, metadata)
+    """
+    try:
+        if file is None:
+            return gr.update(), "", "⚠️ No file selected for upload."
+        
+        # Get file details
+        file_path = file.name
+        file_name = os.path.basename(file_path)
+        
+        # Validate file type
+        valid_extensions = ['.html', '.xml', '.txt', '.md']
+        file_ext = os.path.splitext(file_name)[1].lower()
+        if file_ext not in valid_extensions:
+            return gr.update(), "", f"⚠️ Invalid file type. Please upload: {', '.join(valid_extensions)}"
+        
+        print(f"[INFO] Starting upload: {file_name}")
+        
+        # Read file content
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        file_size = len(file_content)
+        print(f"[INFO] File size: {file_size} bytes")
+        
+        # Determine S3 key (upload to data/directives/)
+        s3_key = f"data/directives/{file_name}"
+        
+        # Check if file already exists
+        file_exists = check_file_exists_in_s3(s3_key)
+        
+        if file_exists:
+            print(f"[INFO] File already exists, will be overwritten: {s3_key}")
+        
+        print(f"[INFO] Uploading to S3: {s3_key}")
+        
+        # Upload to S3 (will automatically overwrite if exists)
+        upload_file_to_s3(file_content, s3_key, overwrite=True)
+        
+        action = "replaced" if file_exists else "uploaded"
+        print(f"[INFO] ✅ File successfully {action}: {file_name}")
+        
+        # Refresh directive list
+        print(f"[INFO] Refreshing directive list...")
+        updated_directives = get_directive_list()
+        
+        # Load the uploaded document
+        print(f"[INFO] Loading uploaded document...")
+        doc_text, doc_metadata = load_document(s3_key)
+        
+        # Enhanced success message with metadata
+        status_icon = "🔄" if file_exists else "✅"
+        status_text = "replaced" if file_exists else "uploaded"
+        success_msg = f"{status_icon} **Successfully {status_text}:** {file_name}\n📦 **Size:** {file_size:,} bytes\n🔗 **S3 Path:** {s3_key}\n\n{doc_metadata}"
+        
+        # Return updated dropdown with the new file selected
+        return (
+            gr.update(choices=updated_directives, value=s3_key),
+            doc_text,
+            success_msg
+        )
+        
+    except Exception as e:
+        error_msg = f"❌ **Upload failed:** {str(e)}\n\nPlease check:\n- AWS credentials are valid\n- You have s3:PutObject permission\n- File is not corrupted"
+        print(f"[ERROR] Upload failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return gr.update(), "", error_msg
 
 def load_document(document_path: str) -> Tuple[str, str]:
     """Load and process a document from S3."""
     try:
+        if not document_path:
+            return "", "Please select a document from the dropdown or upload a file."
+            
         content = read_file_from_s3(document_path)
         metadata = extract_metadata(document_path)
         
@@ -80,7 +170,7 @@ def load_document(document_path: str) -> Tuple[str, str]:
         
         text = clean_text(text)
         
-        # Format metadata
+        # Format metadata only
         metadata_str = f"**File:** {metadata['filename']}\n"
         if metadata['date']:
             metadata_str += f"**Date:** {metadata['date']}\n"
@@ -89,11 +179,9 @@ def load_document(document_path: str) -> Tuple[str, str]:
         if metadata['ticker']:
             metadata_str += f"**Ticker:** {metadata['ticker']}\n"
         
-        preview = text[:1000] + "..." if len(text) > 1000 else text
-        
-        return text, metadata_str + f"\n**Preview:**\n{preview}"
+        return text, metadata_str
     except Exception as e:
-        return "", f"Error loading document: {str(e)}"
+        return "", f"❌ Error loading document: {str(e)}"
 
 def analyze_document(document_text: str) -> str:
     """Analyze document and extract entities."""
@@ -217,12 +305,20 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 with gr.Column():
                     gr.Markdown("### Select or Upload Document")
                     document_selector = gr.Dropdown(
-                        choices=get_directive_list(),
+                        choices=[],  # Will be auto-populated on page load
                         label="Available Regulatory Documents (from S3)",
                         interactive=True
                     )
-                    document_file = gr.File(label="Or Upload New Document")
-                    load_btn = gr.Button("Load Document", variant="primary")
+                    refresh_btn = gr.Button("🔄 Refresh Document List", size="sm")
+                    
+                    gr.Markdown("### Upload New Document")
+                    document_file = gr.File(
+                        label="Upload Document (.html, .xml, .txt)",
+                        file_types=[".html", ".xml", ".txt", ".md"]
+                    )
+                    upload_btn = gr.Button("📤 Upload to S3", variant="secondary")
+                    
+                    load_btn = gr.Button("Load Selected Document", variant="primary")
                     
                 with gr.Column():
                     gr.Markdown("### Document Preview")
@@ -235,11 +331,38 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     )
             
             def load_document_wrapper(path):
+                """Load document from selected path."""
                 if path:
                     return load_document(path)
                 else:
-                    return "", "Please select a document from the dropdown or upload a new file."
+                    return "", "⚠️ Please select a document from the dropdown."
             
+            def refresh_directives():
+                """Refresh the list of available directives."""
+                directives = get_directive_list()
+                print(f"[INFO] Refreshing dropdown with {len(directives)} directives")
+                return gr.update(choices=directives, value=None)
+            
+            # Auto-load directives when app starts
+            demo.load(
+                fn=refresh_directives,
+                outputs=document_selector
+            )
+            
+            # Refresh button - manually trigger list refresh
+            refresh_btn.click(
+                fn=refresh_directives,
+                outputs=document_selector
+            )
+            
+            # Upload button - upload file to S3 and auto-load it
+            upload_btn.click(
+                fn=upload_document_to_s3,
+                inputs=document_file,
+                outputs=[document_selector, document_preview, document_metadata]
+            )
+            
+            # Load document button - load selected document
             load_btn.click(
                 fn=load_document_wrapper,
                 inputs=document_selector,
@@ -310,8 +433,10 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 interactive=False
             )
             
-            # Load data when tab is opened
-            demo.load(
+            load_data_btn = gr.Button("Load Data", variant="primary")
+            
+            # Load data when button is clicked
+            load_data_btn.click(
                 fn=lambda: (load_sp500_data(), load_stock_performance()),
                 outputs=[sp500_display, performance_display]
             )

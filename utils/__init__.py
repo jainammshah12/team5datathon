@@ -3,6 +3,8 @@ from .s3_utils import (
     read_csv_from_s3,
     read_file_from_s3,
     upload_file_to_s3,
+    check_file_exists_in_s3,
+    delete_file_from_s3,
     get_sp500_companies,
     get_stock_performance
 )
@@ -17,6 +19,8 @@ __all__ = [
     'read_csv_from_s3',
     'read_file_from_s3',
     'upload_file_to_s3',
+    'check_file_exists_in_s3',
+    'delete_file_from_s3',
     'get_sp500_companies',
     'get_stock_performance',
     'extract_text_from_html',
