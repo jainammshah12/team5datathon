@@ -1,5 +1,5 @@
 {
-  "system_prompt": "You are a financial analyst AI assistant specialized in analyzing regulatory documents and their potential impact on S&P 500 companies. Your role is to extract key entities, identify potential financial impacts, and provide actionable insights.",
+  "system_prompt": "You are an expert financial analyst and portfolio manager with deep expertise in: (1) SEC filing analysis and financial statement interpretation, (2) regulatory compliance impact assessment across global jurisdictions, (3) risk management and portfolio optimization, (4) sector analysis and market dynamics, (5) quantitative financial modeling. Your role is to provide comprehensive, data-driven investment recommendations that balance risk-adjusted returns with regulatory compliance. Always cite specific evidence from filings and regulations to support your recommendations.",
   "entity_extraction": {
     "task": "Extract key entities and information from regulatory documents",
     "instructions": [
@@ -58,46 +58,81 @@
     }
   },
   "portfolio_recommendation": {
-    "task": "Generate portfolio adjustment recommendations",
+    "task": "Generate comprehensive portfolio adjustment recommendations with detailed financial analysis",
     "instructions": [
-      "Consider current regulatory impacts and company financials",
-      "Suggest weight adjustments for affected positions",
-      "If recommending to decrease exposure to a sector, suggest alternative sectors with specific tickers and explain how they complement the current portfolio",
-      "Provide reasons for sector diversification (risk reduction, growth opportunities, regulatory resilience)",
-      "Recommend hedges or alternative investments only when beneficial",
-      "Cash should ONLY be recommended if there are truly no better investment options - prefer sector diversification",
-      "All recommended weights must sum to 100% (cash can be part of this if truly necessary)",
-      "Provide risk-adjusted return expectations",
-      "Include timeline for recommended actions"
+      "FINANCIAL ANALYSIS: Thoroughly analyze SEC filing data including risk factors, legal proceedings, cybersecurity incidents, material impairments, and earnings trends. Identify red flags such as declining margins, increasing debt, regulatory violations, or operational issues.",
+      "REGULATORY IMPACT: Evaluate how selected regulatory directives affect each portfolio company. Consider compliance costs, operational restrictions, market access limitations, penalties exposure, and competitive advantages/disadvantages created by regulations.",
+      "SECTOR & INDUSTRY ANALYSIS: Assess sector-specific risks and opportunities. Consider industry headwinds/tailwinds, competitive dynamics, technological disruption, regulatory environment, and macroeconomic factors.",
+      "RISK ASSESSMENT: Evaluate multiple risk dimensions - regulatory risk, operational risk, financial risk, market risk, liquidity risk, and concentration risk. Provide specific quantitative estimates when possible (e.g., potential % impact on revenues or costs).",
+      "PORTFOLIO CONSTRUCTION: When recommending weight changes, ensure the resulting portfolio is well-diversified across sectors, market caps, and risk profiles. Target optimal risk-adjusted returns while maintaining liquidity.",
+      "ALTERNATIVE RECOMMENDATIONS: If suggesting to DECREASE exposure to a sector/ticker, ALWAYS provide specific alternative investment opportunities with detailed rationale. Explain how alternatives complement existing holdings through: (a) correlation benefits, (b) risk reduction, (c) growth potential, (d) regulatory resilience, (e) sector/geographic diversification.",
+      "QUANTITATIVE TARGETS: Provide specific current vs. recommended weights for each position. Ensure all weights sum to 100%. Avoid vague suggestions - give precise numerical targets.",
+      "IMPLEMENTATION TIMELINE: Specify urgency and timeframe for each recommendation (immediate, 1-3 months, 3-6 months, long-term). Consider market conditions, liquidity, and tax implications.",
+      "CONFIDENCE LEVELS: Assign confidence scores (high/medium/low) to each recommendation based on data quality, analysis certainty, and external factors.",
+      "EVIDENCE-BASED REASONING: Every recommendation must cite specific evidence from SEC filings or regulatory documents. Reference actual text from risk factors, financial metrics, or regulatory requirements.",
+      "CASH ALLOCATION: Only recommend cash allocation if there are truly no better investment alternatives or if market conditions warrant defensive positioning. Default preference is sector diversification over cash.",
+      "RISK-ADJUSTED RETURNS: Consider both expected returns AND risk levels. Higher-risk recommendations should offer commensurate return potential.",
+      "PORTFOLIO CORRELATION: Consider how recommended changes affect overall portfolio correlation structure and diversification benefits.",
+      "REBALANCING STRATEGY: Provide guidance on optimal rebalancing approach (immediate vs. gradual, tax-loss harvesting opportunities, transaction cost considerations)."
     ],
     "output_format": {
       "recommendations": [
         {
           "action": "increase|decrease|hold|buy|sell",
           "ticker": "string",
+          "company_name": "string",
+          "sector": "string",
           "current_weight": "percentage",
           "recommended_weight": "percentage",
-          "reason": "string",
-          "priority": "high|medium|low"
+          "reason": "string - detailed explanation with evidence from SEC filings",
+          "priority": "critical|high|medium|low",
+          "confidence": "high|medium|low",
+          "timeframe": "immediate|1-3 months|3-6 months|long-term",
+          "key_risks": "string - specific risks identified from filings",
+          "regulatory_impact": "string - how regulations affect this position",
+          "financial_metrics": "string - relevant financial data points (revenue trends, margins, debt levels, etc.)",
+          "expected_impact": "string - estimated portfolio impact (e.g., '+2-3% annual return', 'reduce volatility by 5%')"
         }
       ],
       "sector_diversification": [
         {
           "reduce_sector": "string",
+          "reduction_rationale": "string - why to reduce this sector with evidence",
           "alternative_sectors": [
             {
               "sector_name": "string",
               "suggested_tickers": [
                 "string"
               ],
-              "reasons": "string",
-              "portfolio_complement": "string - how this complements current holdings"
+              "allocation_percentage": "percentage",
+              "reasons": "string - why this sector is attractive",
+              "portfolio_complement": "string - how this complements current holdings",
+              "correlation_benefit": "string - expected correlation with existing holdings",
+              "growth_potential": "string - growth outlook for this sector",
+              "regulatory_advantage": "string - regulatory benefits of this sector"
             }
           ]
         }
       ],
-      "overall_strategy": "string",
-      "risk_assessment": "string"
+      "overall_strategy": "string - comprehensive portfolio strategy with 3-5 key strategic pillars",
+      "risk_assessment": "string - detailed multi-dimensional risk analysis (regulatory, market, operational, financial)",
+      "portfolio_metrics": {
+        "current_risk_score": "1-10 scale",
+        "projected_risk_score": "1-10 scale after implementing recommendations",
+        "expected_return_improvement": "percentage",
+        "diversification_score": "string - assessment of portfolio diversification"
+      },
+      "implementation_roadmap": [
+        {
+          "phase": "string - phase 1, 2, 3",
+          "timeframe": "string",
+          "actions": ["list of specific actions"],
+          "rationale": "string"
+        }
+      ],
+      "regulatory_compliance_summary": "string - overview of how portfolio aligns with regulatory requirements",
+      "top_opportunities": ["list of 3-5 key opportunities identified"],
+      "top_risks": ["list of 3-5 key risks to monitor"]
     }
   },
   "simulation": {

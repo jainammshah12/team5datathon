@@ -1440,12 +1440,45 @@ def generate_portfolio_recommendations_from_filings(
                 "3. Check console logs for detailed error information"
             )
 
-        # Format output with priority sorting
-        result = "## 📊 Portfolio Recommendations\n\n"
-        result += f"**Overall Strategy:** {recommendations.get('overall_strategy', 'N/A')}\n\n"
-        result += (
-            f"**Risk Assessment:** {recommendations.get('risk_assessment', 'N/A')}\n\n"
-        )
+        # Format output with enhanced display
+        result = "## 📊 AI-Powered Portfolio Recommendations\n\n"
+        
+        # Overall Strategy Section
+        result += "### 🎯 Overall Strategy\n"
+        result += f"{recommendations.get('overall_strategy', 'N/A')}\n\n"
+        
+        # Risk Assessment Section
+        result += "### ⚠️ Risk Assessment\n"
+        result += f"{recommendations.get('risk_assessment', 'N/A')}\n\n"
+        
+        # Portfolio Metrics (if available)
+        if recommendations.get('portfolio_metrics'):
+            metrics = recommendations['portfolio_metrics']
+            result += "### 📈 Portfolio Metrics\n"
+            result += f"- **Current Risk Score:** {metrics.get('current_risk_score', 'N/A')}/10\n"
+            result += f"- **Projected Risk Score:** {metrics.get('projected_risk_score', 'N/A')}/10 (after implementing recommendations)\n"
+            result += f"- **Expected Return Improvement:** {metrics.get('expected_return_improvement', 'N/A')}\n"
+            result += f"- **Diversification Score:** {metrics.get('diversification_score', 'N/A')}\n\n"
+        
+        # Top Opportunities and Risks
+        if recommendations.get('top_opportunities'):
+            result += "### 💡 Top Opportunities\n"
+            for opp in recommendations['top_opportunities']:
+                result += f"- {opp}\n"
+            result += "\n"
+        
+        if recommendations.get('top_risks'):
+            result += "### 🚨 Top Risks to Monitor\n"
+            for risk in recommendations['top_risks']:
+                result += f"- {risk}\n"
+            result += "\n"
+        
+        # Regulatory Compliance Summary
+        if recommendations.get('regulatory_compliance_summary'):
+            result += "### ✅ Regulatory Compliance Summary\n"
+            result += f"{recommendations['regulatory_compliance_summary']}\n\n"
+        
+        result += "---\n\n"
 
         recs = recommendations.get("recommendations", [])
         if not recs:
@@ -1553,9 +1586,11 @@ def generate_portfolio_recommendations_from_filings(
 
         # Critical/High Priority
         if critical:
-            result += "### 🔴 Critical / High Priority\n\n"
+            result += "## 🔴 Critical / High Priority Actions\n\n"
             for rec in critical:
                 ticker = rec.get("ticker", "N/A")
+                company_name = rec.get("company_name", "")
+                sector = rec.get("sector", "")
                 action = rec.get("action", "hold").upper()
                 current_weight = portfolio_weights.get(ticker, 0) * 100
                 original_rec_weight = rec.get("recommended_weight", current_weight)
@@ -1569,42 +1604,89 @@ def generate_portfolio_recommendations_from_filings(
                     normalized_weights.get(ticker, current_weight / 100) * 100
                 )
                 reason = rec.get("reason", "No reason provided")
-
-                result += f"**{action} {ticker}** (Priority: {rec.get('priority', 'high').upper()})\n"
-                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
-                result += f"- Reason: {reason}\n\n"
+                confidence = rec.get("confidence", "medium")
+                timeframe = rec.get("timeframe", "N/A")
+                
+                # Display ticker with company info
+                company_info = f"{ticker}"
+                if company_name:
+                    company_info += f" - {company_name}"
+                if sector:
+                    company_info += f" ({sector})"
+                
+                result += f"### **{action}: {company_info}**\n"
+                result += f"**Priority:** {rec.get('priority', 'high').upper()} | **Confidence:** {confidence.upper()} | **Timeframe:** {timeframe}\n\n"
+                result += f"**Portfolio Weight:** {current_weight:.2f}% → **Recommended:** {normalized_rec_weight:.2f}%\n\n"
+                result += f"**Rationale:** {reason}\n\n"
+                
+                # Add additional details if available
+                if rec.get("key_risks"):
+                    result += f"**Key Risks:** {rec['key_risks']}\n\n"
+                if rec.get("regulatory_impact"):
+                    result += f"**Regulatory Impact:** {rec['regulatory_impact']}\n\n"
+                if rec.get("financial_metrics"):
+                    result += f"**Financial Metrics:** {rec['financial_metrics']}\n\n"
+                if rec.get("expected_impact"):
+                    result += f"**Expected Impact:** {rec['expected_impact']}\n\n"
+                
+                result += "---\n\n"
 
         # Medium Priority
         if medium:
-            result += "### 🟡 Medium Priority\n\n"
+            result += "## 🟡 Medium Priority Actions\n\n"
             for rec in medium:
                 ticker = rec.get("ticker", "N/A")
+                company_name = rec.get("company_name", "")
+                sector = rec.get("sector", "")
                 action = rec.get("action", "hold").upper()
                 current_weight = portfolio_weights.get(ticker, 0) * 100
                 normalized_rec_weight = (
                     normalized_weights.get(ticker, current_weight / 100) * 100
                 )
                 reason = rec.get("reason", "No reason provided")
+                confidence = rec.get("confidence", "medium")
+                timeframe = rec.get("timeframe", "N/A")
+                
+                company_info = f"{ticker}"
+                if company_name:
+                    company_info += f" - {company_name}"
+                if sector:
+                    company_info += f" ({sector})"
 
-                result += f"**{action} {ticker}**\n"
-                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
-                result += f"- Reason: {reason}\n\n"
+                result += f"**{action}: {company_info}**\n"
+                result += f"*Confidence: {confidence.capitalize()} | Timeframe: {timeframe}*\n\n"
+                result += f"Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n\n"
+                result += f"{reason}\n\n"
+                
+                # Add key additional info if available
+                if rec.get("regulatory_impact"):
+                    result += f"*Regulatory Impact: {rec['regulatory_impact']}*\n\n"
+                if rec.get("expected_impact"):
+                    result += f"*Expected Impact: {rec['expected_impact']}*\n\n"
+                
+                result += "---\n\n"
 
         # Low Priority
         if low:
-            result += "### 🟢 Low Priority\n\n"
+            result += "## 🟢 Low Priority / Monitoring\n\n"
             for rec in low:
                 ticker = rec.get("ticker", "N/A")
+                company_name = rec.get("company_name", "")
                 action = rec.get("action", "hold").upper()
                 current_weight = portfolio_weights.get(ticker, 0) * 100
                 normalized_rec_weight = (
                     normalized_weights.get(ticker, current_weight / 100) * 100
                 )
                 reason = rec.get("reason", "No reason provided")
+                timeframe = rec.get("timeframe", "N/A")
+                
+                company_info = f"{ticker}"
+                if company_name:
+                    company_info += f" - {company_name}"
 
-                result += f"**{action} {ticker}**\n"
-                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
-                result += f"- Reason: {reason}\n\n"
+                result += f"**{action}: {company_info}** (*{timeframe}*)\n"
+                result += f"Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n\n"
+                result += f"{reason}\n\n"
 
         # Add normalized portfolio summary table
         result += f"\n---\n\n"
@@ -1623,30 +1705,71 @@ def generate_portfolio_recommendations_from_filings(
             total_normalized += normalized_w
             result += f"| {ticker} | {current_w:.2f}% | {normalized_w:.2f}% | {change:+.2f}% |\n"
 
+        # Add implementation roadmap if available
+        if recommendations.get('implementation_roadmap'):
+            result += f"\n---\n\n"
+            result += f"## 🗓️ Implementation Roadmap\n\n"
+            for phase in recommendations['implementation_roadmap']:
+                phase_name = phase.get("phase", "Phase")
+                timeframe = phase.get("timeframe", "N/A")
+                actions = phase.get("actions", [])
+                rationale = phase.get("rationale", "")
+                
+                result += f"### {phase_name} ({timeframe})\n\n"
+                if rationale:
+                    result += f"*{rationale}*\n\n"
+                if actions:
+                    result += "**Actions:**\n"
+                    for action in actions:
+                        result += f"- {action}\n"
+                    result += "\n"
+        
         # Add sector diversification suggestions if available
         if sector_diversification:
             result += f"\n---\n\n"
-            result += f"### 🔄 **Sector Diversification Recommendations**\n\n"
+            result += f"## 🔄 Sector Diversification Recommendations\n\n"
             for div_rec in sector_diversification:
                 reduce_sector = div_rec.get("reduce_sector", "Unknown Sector")
-                result += f"**Reduce Exposure to: {reduce_sector}**\n\n"
+                reduction_rationale = div_rec.get("reduction_rationale", "")
+                
+                result += f"### Reduce Exposure to: {reduce_sector}\n\n"
+                if reduction_rationale:
+                    result += f"{reduction_rationale}\n\n"
 
                 alternatives = div_rec.get("alternative_sectors", [])
-                for alt_sector in alternatives:
-                    sector_name = alt_sector.get("sector_name", "Unknown")
-                    suggested_tickers = alt_sector.get("suggested_tickers", [])
-                    reasons = alt_sector.get("reasons", "No reasons provided")
-                    complement = alt_sector.get(
-                        "portfolio_complement", "No complement info"
-                    )
-
-                    result += f"**→ Consider {sector_name} Sector:**\n"
-                    if suggested_tickers:
-                        result += (
-                            f"- **Suggested Tickers:** {', '.join(suggested_tickers)}\n"
+                if alternatives:
+                    result += "**Alternative Sector Opportunities:**\n\n"
+                    for alt_sector in alternatives:
+                        sector_name = alt_sector.get("sector_name", "Unknown")
+                        suggested_tickers = alt_sector.get("suggested_tickers", [])
+                        allocation = alt_sector.get("allocation_percentage", "")
+                        reasons = alt_sector.get("reasons", "No reasons provided")
+                        complement = alt_sector.get(
+                            "portfolio_complement", "No complement info"
                         )
-                    result += f"- **Reasons:** {reasons}\n"
-                    result += f"- **Portfolio Complement:** {complement}\n\n"
+                        correlation = alt_sector.get("correlation_benefit", "")
+                        growth = alt_sector.get("growth_potential", "")
+                        reg_advantage = alt_sector.get("regulatory_advantage", "")
+
+                        result += f"#### {sector_name} Sector"
+                        if allocation:
+                            result += f" ({allocation} allocation)"
+                        result += "\n\n"
+                        
+                        if suggested_tickers:
+                            result += f"**Suggested Tickers:** {', '.join(suggested_tickers)}\n\n"
+                        
+                        result += f"**Why This Sector:** {reasons}\n\n"
+                        result += f"**Portfolio Fit:** {complement}\n\n"
+                        
+                        if correlation:
+                            result += f"**Correlation Benefits:** {correlation}\n\n"
+                        if growth:
+                            result += f"**Growth Outlook:** {growth}\n\n"
+                        if reg_advantage:
+                            result += f"**Regulatory Position:** {reg_advantage}\n\n"
+                        
+                        result += "---\n\n"
 
         # Add cash if suggested (only when truly no better options)
         if cash_suggestion > 0.01:  # Only show if > 1%
