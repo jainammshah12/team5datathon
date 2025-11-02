@@ -265,6 +265,7 @@ class LLMClient:
                     max_tokens=max_tokens,
                     temperature=0.3  # Lower temperature for more consistent output
                 )
+                print("[DEBUG] OpenAI response preview:", response.choices[0].message.content[:250], "...")
                 return response.choices[0].message.content
             except Exception as e:
                 print(f"[WARNING] OpenAI API failed: {e}")
