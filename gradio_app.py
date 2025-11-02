@@ -3,6 +3,7 @@ import gradio as gr
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import json
+import os
 
 # Import utility modules
 from utils.s3_utils import (
@@ -10,7 +11,8 @@ from utils.s3_utils import (
     get_stock_performance,
     get_available_directives,
     get_available_filings,
-    read_file_from_s3
+    read_file_from_s3,
+    list_files_in_s3
 )
 from utils.document_processor import (
     extract_text_from_html,
@@ -36,6 +38,7 @@ from utils.portfolio_storage import (
 from utils.s3_utils import get_available_filings
 from utils.sec_filing_extractor import extract_key_filing_sections
 from utils.yfinance_fetcher import fetch_daily_stock_data
+from utils.filing_loader import load_portfolio_filings, get_relevant_sections_for_analysis
 from llm.llm_client import get_llm_client
 
 # Initialize LLM client
@@ -81,6 +84,97 @@ def get_directive_list() -> List[str]:
         return [d for d in directives if '.' in d.split('/')[-1] and 'README' not in d]
     except Exception as e:
         return [f"Error loading directives: {str(e)}"]
+
+def load_directives_for_recommendations() -> Dict[str, Dict[str, str]]:
+    """
+    Load regulatory directives from S3 for use in portfolio recommendations.
+    Processes raw HTML/XML files from data/directives/ directory.
+    
+    Returns:
+        Dictionary mapping directive name -> extracted sections
+    """
+    directives_data = {}
+    try:
+        # Get available directives from S3 (data/directives/)
+        directive_files = get_available_directives()
+        
+        # Filter for HTML/XML files (raw directives)
+        raw_files = [d for d in directive_files if d.endswith(('.html', '.xml', '.htm'))]
+        
+        # Also check for JSON files (pre-extracted)
+        json_files = [d for d in directive_files if d.endswith('.json')]
+        
+        # First try to load pre-extracted JSON files
+        for directive_path in json_files[:3]:  # Limit to 3 JSON files
+            try:
+                content = read_file_from_s3(directive_path)
+                if content:
+                    import json
+                    directive_data = json.loads(content)
+                    directive_name = directive_path.split('/')[-1].replace('.json', '').replace('extracted_', '')
+                    directives_data[directive_name] = directive_data
+                    print(f"[INFO] Loaded pre-extracted directive: {directive_name}")
+            except Exception as e:
+                print(f"[WARNING] Could not load JSON directive {directive_path}: {e}")
+                continue
+        
+        # Process raw HTML/XML files if we don't have enough
+        if len(directives_data) < 3 and raw_files:
+            try:
+                from utils.directive_analyzer import (
+                    extract_sections_from_directive, 
+                    is_xml_content, 
+                    detect_language,
+                    extract_full_text_from_html
+                )
+                directive_analyzer_available = True
+            except ImportError:
+                print("[WARNING] directive_analyzer not available, skipping raw directive processing")
+                directive_analyzer_available = False
+            
+            if directive_analyzer_available:
+                # Process up to 3 raw directives
+                for directive_path in raw_files[:3]:
+                    if len(directives_data) >= 5:  # Total limit of 5 directives
+                        break
+                    
+                    try:
+                        print(f"[INFO] Processing raw directive: {directive_path}")
+                        content = read_file_from_s3(directive_path)
+                        if not content:
+                            continue
+                        
+                        # Detect format and language
+                        is_xml = is_xml_content(content)
+                        text = extract_full_text_from_html(content, is_xml=is_xml)
+                        
+                        # Detect language (fallback to 'en' if detection fails)
+                        try:
+                            language, _ = detect_language(text)
+                        except:
+                            language = 'en'
+                        
+                        # Extract sections
+                        sections = extract_sections_from_directive(content, is_xml=is_xml, language=language)
+                        
+                        # Extract directive name from path
+                        directive_name = directive_path.split('/')[-1].replace('.html', '').replace('.xml', '').replace('.htm', '')
+                        directives_data[directive_name] = sections
+                        print(f"[INFO] Extracted and loaded directive: {directive_name}")
+                        
+                    except Exception as e:
+                        print(f"[WARNING] Could not process raw directive {directive_path}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
+        
+    except Exception as e:
+        print(f"[WARNING] Error loading directives: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return directives_data
+
 
 def load_document(document_path: str) -> Tuple[str, str]:
     """Load and process a document from S3."""
@@ -278,9 +372,10 @@ def add_stock_to_portfolio(
         return f"❌ Error: {str(e)}", current_portfolio_df
 
 
-def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame) -> str:
+def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame, portfolio_name: str = None) -> str:
     """
-    Save current portfolio to S3.
+    Save current portfolio to S3 with optional name.
+    If name not provided or name exists, auto-generates unique name.
     
     Returns:
         Status message
@@ -289,10 +384,37 @@ def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame) -> str:
         return "⚠️ Portfolio is empty. Add some stocks first."
     
     try:
-        success, error = save_portfolio_to_s3(portfolio_df)
+        # Generate filename if not provided
+        if not portfolio_name or not portfolio_name.strip():
+            portfolio_name = "portfolio"
+        
+        # Clean portfolio name (remove invalid characters)
+        portfolio_name = "".join(c for c in portfolio_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        if not portfolio_name:
+            portfolio_name = "portfolio"
+        
+        # Check for existing portfolios and find unique name
+        existing_portfolios = list_portfolios_in_s3()
+        base_filename = f"{portfolio_name}.csv"
+        filename = base_filename
+        
+        # If filename exists, append number
+        if base_filename in existing_portfolios:
+            counter = 1
+            while filename in existing_portfolios:
+                filename = f"{portfolio_name}_{counter}.csv"
+                counter += 1
+            if counter > 1:
+                status_msg = f"⚠️ Portfolio name '{portfolio_name}' already exists. Saved as '{filename}'\n\n"
+            else:
+                status_msg = ""
+        else:
+            status_msg = ""
+        
+        success, error = save_portfolio_to_s3(portfolio_df, filename=filename)
         
         if success:
-            return f"✅ Portfolio saved to S3 successfully! ({len(portfolio_df)} holdings)"
+            return status_msg + f"✅ Portfolio '{filename}' saved to S3 successfully! ({len(portfolio_df)} holdings)"
         else:
             return f"❌ Failed to save portfolio: {error}"
     except Exception as e:
@@ -329,9 +451,9 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
             for ticker in unique_tickers:
                 try:
                     # First, check if extracted data already exists in S3
-                    # Check in data/filings/{ticker}/ for extracted JSON files
+                    # Check in data/fillings/{ticker}/ for extracted JSON files
                     from utils.s3_utils import list_files_in_s3
-                    extracted_prefix = f"data/filings/{ticker}/"
+                    extracted_prefix = f"data/fillings/{ticker}/"
                     existing_extractions = list_files_in_s3(extracted_prefix)
                     
                     # Filter for 10-K JSON files (should have "10_K" or "10k" in name)
@@ -393,7 +515,7 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                     print(f"[WARNING] Could not process {ticker}: {e}")
                     status_msg += f"❌ {ticker}: {str(e)}\n"
             
-            status_msg += f"\n💾 Extracted data location: `data/filings/`\n"
+            status_msg += f"\n💾 Extracted data location: `data/fillings/`\n"
             status_msg += f"📊 Status: {extraction_count} extracted, {skipped_count} using existing data ({extraction_count + skipped_count}/{len(unique_tickers)} ready)"
             
             return df, status_msg
@@ -472,6 +594,492 @@ def upload_portfolio_manual(portfolio_text: str) -> Tuple[str, pd.DataFrame, str
         
     except Exception as e:
         return f"❌ Error loading portfolio: {str(e)}", pd.DataFrame(), ""
+
+
+def generate_portfolio_recommendations_from_filings(portfolio_df: pd.DataFrame) -> str:
+    """
+    Generate portfolio recommendations based on SEC filing data.
+    Uses extracted filing sections to provide actionable recommendations.
+    
+    Args:
+        portfolio_df: DataFrame with portfolio holdings (Ticker, Price, Quantity, Date_Bought)
+    
+    Returns:
+        Formatted markdown string with recommendations
+    """
+    if portfolio_df is None or len(portfolio_df) == 0:
+        return (
+            "⚠️ **Portfolio is empty.**\n\n"
+            "Please add stocks to your portfolio first using:\n"
+            "1. Load from S3 dropdown, OR\n"
+            "2. Manually add stocks using the 'Add Stock' form"
+        )
+    
+    try:
+        # Get portfolio tickers and calculate weights
+        tickers = portfolio_df['Ticker'].unique().tolist()
+        total_cost = (portfolio_df['Price'] * portfolio_df['Quantity']).sum()
+        
+        portfolio_weights = {}
+        portfolio_purchase_info = {}  # Store purchase price, quantity, date for each ticker
+        for ticker in tickers:
+            ticker_rows = portfolio_df[portfolio_df['Ticker'] == ticker]
+            ticker_cost = (ticker_rows['Price'] * ticker_rows['Quantity']).sum()
+            portfolio_weights[ticker] = ticker_cost / total_cost if total_cost > 0 else 0
+            
+            # Store purchase info for performance analysis
+            portfolio_purchase_info[ticker] = {
+                'avg_purchase_price': ticker_cost / ticker_rows['Quantity'].sum() if ticker_rows['Quantity'].sum() > 0 else 0,
+                'total_quantity': ticker_rows['Quantity'].sum(),
+                'total_cost': ticker_cost,
+                'earliest_date': ticker_rows['Date_Bought'].min() if 'Date_Bought' in ticker_rows.columns else None
+            }
+        
+        # Fetch current prices for performance analysis
+        print(f"[INFO] Fetching current prices for {len(tickers)} holdings...")
+        current_prices = {}
+        for ticker in tickers:
+            try:
+                from utils.yfinance_fetcher import fetch_stock_info
+                info = fetch_stock_info(ticker)
+                current_price = info.get('Current Price')
+                if current_price:
+                    current_prices[ticker] = current_price
+                    print(f"[INFO] {ticker}: Current price ${current_price:.2f}")
+            except Exception as e:
+                print(f"[WARNING] Could not fetch current price for {ticker}: {e}")
+                # Use purchase price as fallback
+                current_prices[ticker] = portfolio_purchase_info[ticker]['avg_purchase_price']
+        
+        print(f"[INFO] ===== Generating Recommendations =====")
+        print(f"[INFO] Portfolio tickers: {tickers}")
+        print(f"[INFO] Portfolio weights: {portfolio_weights}")
+        
+        # Load extracted filing data for portfolio tickers
+        print(f"[INFO] Loading filing data for {len(tickers)} portfolio companies...")
+        filings_data = load_portfolio_filings(tickers)
+        
+        # Load directives from S3
+        print(f"[INFO] Loading regulatory directives from S3...")
+        directives_data = load_directives_for_recommendations()
+        if directives_data:
+            print(f"[INFO] Loaded {len(directives_data)} directive(s) for analysis")
+        
+        # Provide detailed feedback about filing data availability
+        missing_tickers = [t for t in tickers if t not in filings_data]
+        if missing_tickers:
+            print(f"[WARNING] No filing data found for: {missing_tickers}")
+        
+        # Even without filing data, show basic recommendations based on portfolio structure
+        if not filings_data:
+            result = "## 📊 Portfolio Recommendations\n\n"
+            result += f"**⚠️ No SEC filing data found for portfolio companies.**\n\n"
+            result += f"**Your Portfolio:**\n"
+            for ticker in tickers:
+                weight_pct = portfolio_weights.get(ticker, 0) * 100
+                ticker_rows = portfolio_df[portfolio_df['Ticker'] == ticker]
+                total_shares = ticker_rows['Quantity'].sum()
+                result += f"- **{ticker}**: {weight_pct:.2f}% ({total_shares} shares)\n"
+            
+            result += f"\n**To get AI-powered recommendations:**\n"
+            result += f"1. Click 'Load Portfolio' from S3 dropdown (this automatically extracts SEC filings)\n"
+            result += f"2. Wait for filing extraction to complete\n"
+            result += f"3. Click this button again\n\n"
+            result += f"**Expected filing location:** `data/fillings/{{ticker}}/` in S3\n"
+            result += f"**Portfolio tickers needing data:** {', '.join(tickers)}\n\n"
+            result += f"**💡 Alternative:** You can also manually review SEC filings in the Data Explorer tab."
+            return result
+        
+        # Extract relevant sections for each ticker (token optimization)
+        filing_sections = {}
+        for ticker, filing_data in filings_data.items():
+            sections = get_relevant_sections_for_analysis(filing_data, max_chars_per_section=2000)
+            if sections:
+                filing_sections[ticker] = sections
+                print(f"[INFO] Loaded sections for {ticker}: {list(sections.keys())}")
+            else:
+                print(f"[WARNING] No relevant sections found for {ticker}")
+        
+        if not filing_sections:
+            result = "## 📊 Portfolio Recommendations\n\n"
+            result += f"**⚠️ No relevant sections found in extracted filing data.**\n\n"
+            result += f"**Your Portfolio:**\n"
+            for ticker in tickers:
+                weight_pct = portfolio_weights.get(ticker, 0) * 100
+                result += f"- **{ticker}**: {weight_pct:.2f}%\n"
+            
+            result += f"\n**Files found in S3:** {', '.join(filings_data.keys())}\n"
+            result += f"**Issue:** Extracted filings may not contain expected sections.\n\n"
+            result += f"**Next Steps:**\n"
+            result += f"1. Check if SEC filing extraction completed successfully\n"
+            result += f"2. Review files in `data/fillings/{{ticker}}/` in S3\n"
+            result += f"3. Try loading the portfolio again to re-extract filings"
+            return result
+        
+        print(f"[INFO] Generating recommendations using LLM for {len(filing_sections)} companies...")
+        print(f"[INFO] Portfolio weights: {portfolio_weights}")
+        print(f"[INFO] Filing sections available: {list(filing_sections.keys())}")
+        
+        # Load directives from S3
+        print(f"[INFO] Loading regulatory directives from S3...")
+        directives_data = load_directives_for_recommendations()
+        if directives_data:
+            print(f"[INFO] Loaded {len(directives_data)} directive(s) for analysis")
+        else:
+            print(f"[INFO] No directives found in S3 (this is optional)")
+        
+        # Generate recommendations using LLM
+        try:
+            recommendations = llm_client.generate_portfolio_recommendations_from_filings(
+                portfolio_tickers=list(filing_sections.keys()),
+                portfolio_weights=portfolio_weights,
+                filing_sections=filing_sections,
+                directives_data=directives_data if directives_data else {}
+            )
+            
+            print(f"[INFO] Recommendations received: {len(recommendations.get('recommendations', []))} items")
+            print(f"[INFO] Overall strategy: {recommendations.get('overall_strategy', 'N/A')[:100]}")
+        except Exception as e:
+            print(f"[ERROR] Error in generate_portfolio_recommendations_from_filings: {e}")
+            import traceback
+            traceback.print_exc()
+            return (
+                f"❌ **Error generating recommendations:** {str(e)}\n\n"
+                "**Please check:**\n"
+                "1. LLM API key is configured in .env file\n"
+                "2. Filing data exists for your portfolio tickers\n"
+                "3. Check console logs for detailed error information"
+            )
+        
+        # Format output with priority sorting
+        result = "## 📊 Portfolio Recommendations\n\n"
+        result += f"**Overall Strategy:** {recommendations.get('overall_strategy', 'N/A')}\n\n"
+        result += f"**Risk Assessment:** {recommendations.get('risk_assessment', 'N/A')}\n\n"
+        
+        recs = recommendations.get('recommendations', [])
+        if not recs:
+            # Show helpful diagnostic information
+            result = "## 📊 Portfolio Recommendations\n\n"
+            result += f"**Overall Strategy:** {recommendations.get('overall_strategy', 'N/A')}\n\n"
+            result += f"**Risk Assessment:** {recommendations.get('risk_assessment', 'N/A')}\n\n"
+            result += "**⚠️ No specific recommendations generated.**\n\n"
+            result += "**Diagnostic Information:**\n\n"
+            result += f"- **Filing data loaded:** {len(filings_data)}/{len(tickers)} companies\n"
+            if len(filings_data) < len(tickers):
+                missing = [t for t in tickers if t not in filings_data]
+                result += f"- **Missing filing data for:** {', '.join(missing)}\n"
+                result += f"- **Action needed:** Load a portfolio from S3 to extract SEC filings\n\n"
+            else:
+                result += "- ✅ All portfolio companies have filing data\n\n"
+            
+            result += "**Possible reasons:**\n"
+            result += "1. **LLM API not configured** (add OPENAI_API_KEY or PERPLEXITY_API_KEY to .env)\n"
+            result += "2. API call failed (check console logs for errors)\n"
+            result += "3. Filing sections may be empty (check extraction status)\n\n"
+            result += "**Next Steps:**\n"
+            result += "1. **Configure API Key:** Add one of these to your `.env` file:\n"
+            result += "   - `OPENAI_API_KEY=sk-your-key-here` (get from https://platform.openai.com/api-keys)\n"
+            result += "   - `PERPLEXITY_API_KEY=pplx-your-key-here` (get from https://www.perplexity.ai/settings/api)\n"
+            result += "2. Ensure SEC filing extraction completed successfully\n"
+            result += "3. Review console output for detailed error messages\n"
+            result += "4. Click this button again after configuring the API key\n\n"
+            result += f"**Note:** Without an API key, you'll see basic portfolio information but not AI-powered analysis."
+            return result
+        
+        # Group by priority
+        critical = [r for r in recs if r.get('priority', 'low').lower() in ['critical', 'high']]
+        medium = [r for r in recs if r.get('priority', 'low').lower() == 'medium']
+        low = [r for r in recs if r.get('priority', 'low').lower() == 'low']
+        
+        # Collect all recommended weights and normalize to 100%
+        # Create a dict to track recommended weights for each ticker
+        recommended_weights = {}
+        for rec in recs:
+            ticker = rec.get('ticker')
+            if ticker:
+                # Handle different formats: could be percentage string, float, or already in decimal
+                rec_weight = rec.get('recommended_weight', portfolio_weights.get(ticker, 0))
+                # Convert to decimal if it's a percentage (e.g., "15" or 15 means 15%)
+                if isinstance(rec_weight, str):
+                    rec_weight = float(rec_weight.replace('%', ''))
+                rec_weight = float(rec_weight)
+                # If weight > 1, assume it's a percentage and convert to decimal
+                if rec_weight > 1:
+                    rec_weight = rec_weight / 100
+                recommended_weights[ticker] = max(0, rec_weight)  # Ensure non-negative
+        
+        # Calculate total recommended weight
+        total_recommended = sum(recommended_weights.values())
+        
+        # Check for sector diversification suggestions from LLM
+        sector_diversification = recommendations.get('sector_diversification', [])
+        
+        # Normalize weights to sum to exactly 100%
+        # Cash is only suggested if there are truly no better investment options
+        # Prefer sector diversification over cash
+        if total_recommended > 0:
+            # If we have sector diversification suggestions, always normalize to 100% (no cash)
+            # If recommendations are low and no diversification suggestions, cash might be appropriate
+            if total_recommended < 0.90 and not sector_diversification:
+                # Very few recommendations and no alternatives - cash as last resort
+                cash_suggestion = 1.0 - total_recommended
+                # Re-normalize stocks to leave room for cash
+                stock_target = 1.0 - cash_suggestion
+                if stock_target > 0:
+                    normalization_factor = stock_target / total_recommended
+                    normalized_weights = {t: w * normalization_factor for t, w in recommended_weights.items()}
+                else:
+                    normalized_weights = recommended_weights.copy()
+                    cash_suggestion = 1.0 - sum(normalized_weights.values())
+            else:
+                # Normalize to exactly 100% - prefer sector diversification over cash
+                normalization_factor = 1.0 / total_recommended if total_recommended > 0 else 0
+                normalized_weights = {t: w * normalization_factor for t, w in recommended_weights.items()}
+                cash_suggestion = 0
+        else:
+            # If no recommendations provided, keep current weights normalized
+            normalized_weights = portfolio_weights.copy()
+            total_current = sum(normalized_weights.values())
+            if total_current > 0:
+                normalization_factor = 1.0 / total_current
+                normalized_weights = {t: w * normalization_factor for t, w in normalized_weights.items()}
+            cash_suggestion = 0
+        
+        # Critical/High Priority
+        if critical:
+            result += "### 🔴 Critical / High Priority\n\n"
+            for rec in critical:
+                ticker = rec.get('ticker', 'N/A')
+                action = rec.get('action', 'hold').upper()
+                current_weight = portfolio_weights.get(ticker, 0) * 100
+                original_rec_weight = rec.get('recommended_weight', current_weight)
+                # Handle different formats
+                if isinstance(original_rec_weight, str):
+                    original_rec_weight = float(original_rec_weight.replace('%', ''))
+                original_rec_weight = float(original_rec_weight)
+                if original_rec_weight > 1:
+                    original_rec_weight = original_rec_weight / 100
+                normalized_rec_weight = normalized_weights.get(ticker, current_weight / 100) * 100
+                reason = rec.get('reason', 'No reason provided')
+                
+                result += f"**{action} {ticker}** (Priority: {rec.get('priority', 'high').upper()})\n"
+                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
+                result += f"- Reason: {reason}\n\n"
+        
+        # Medium Priority
+        if medium:
+            result += "### 🟡 Medium Priority\n\n"
+            for rec in medium:
+                ticker = rec.get('ticker', 'N/A')
+                action = rec.get('action', 'hold').upper()
+                current_weight = portfolio_weights.get(ticker, 0) * 100
+                normalized_rec_weight = normalized_weights.get(ticker, current_weight / 100) * 100
+                reason = rec.get('reason', 'No reason provided')
+                
+                result += f"**{action} {ticker}**\n"
+                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
+                result += f"- Reason: {reason}\n\n"
+        
+        # Low Priority
+        if low:
+            result += "### 🟢 Low Priority\n\n"
+            for rec in low:
+                ticker = rec.get('ticker', 'N/A')
+                action = rec.get('action', 'hold').upper()
+                current_weight = portfolio_weights.get(ticker, 0) * 100
+                normalized_rec_weight = normalized_weights.get(ticker, current_weight / 100) * 100
+                reason = rec.get('reason', 'No reason provided')
+                
+                result += f"**{action} {ticker}**\n"
+                result += f"- Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n"
+                result += f"- Reason: {reason}\n\n"
+        
+        # Add normalized portfolio summary table
+        result += f"\n---\n\n"
+        result += f"### 📋 **Normalized Portfolio Allocation**\n\n"
+        result += f"| Ticker | Current | Recommended | Change |\n"
+        result += f"|--------|---------|------------|--------|\n"
+        
+        # Calculate total for verification
+        total_normalized = 0
+        for ticker in sorted(set(list(portfolio_weights.keys()) + list(normalized_weights.keys()))):
+            current_w = portfolio_weights.get(ticker, 0) * 100
+            normalized_w = normalized_weights.get(ticker, 0) * 100
+            change = normalized_w - current_w
+            total_normalized += normalized_w
+            result += f"| {ticker} | {current_w:.2f}% | {normalized_w:.2f}% | {change:+.2f}% |\n"
+        
+        # Add sector diversification suggestions if available
+        if sector_diversification:
+            result += f"\n---\n\n"
+            result += f"### 🔄 **Sector Diversification Recommendations**\n\n"
+            for div_rec in sector_diversification:
+                reduce_sector = div_rec.get('reduce_sector', 'Unknown Sector')
+                result += f"**Reduce Exposure to: {reduce_sector}**\n\n"
+                
+                alternatives = div_rec.get('alternative_sectors', [])
+                for alt_sector in alternatives:
+                    sector_name = alt_sector.get('sector_name', 'Unknown')
+                    suggested_tickers = alt_sector.get('suggested_tickers', [])
+                    reasons = alt_sector.get('reasons', 'No reasons provided')
+                    complement = alt_sector.get('portfolio_complement', 'No complement info')
+                    
+                    result += f"**→ Consider {sector_name} Sector:**\n"
+                    if suggested_tickers:
+                        result += f"- **Suggested Tickers:** {', '.join(suggested_tickers)}\n"
+                    result += f"- **Reasons:** {reasons}\n"
+                    result += f"- **Portfolio Complement:** {complement}\n\n"
+        
+        # Add cash if suggested (only when truly no better options)
+        if cash_suggestion > 0.01:  # Only show if > 1%
+            result += f"| **Cash** | 0.00% | {cash_suggestion * 100:.2f}% | +{cash_suggestion * 100:.2f}% |\n"
+            total_normalized += cash_suggestion * 100
+            result += f"\n⚠️ **Cash Allocation Note:** {cash_suggestion * 100:.1f}% cash is suggested only because no better investment options were identified. "
+            if sector_diversification:
+                result += f"Consider the sector diversification opportunities above.\n"
+            else:
+                result += f"Consider exploring additional sectors for diversification.\n"
+        
+        result += f"\n**Total:** {total_normalized:.2f}% ✅\n"
+        
+        # Add Performance Analysis Section
+        result += f"\n---\n\n"
+        result += f"### 📈 **Current Portfolio Performance**\n\n"
+        result += f"| Ticker | Purchase Price | Current Price | Gain/Loss % | Gain/Loss $ |\n"
+        result += f"|--------|----------------|---------------|-------------|-------------|\n"
+        
+        total_current_value = 0
+        total_cost_basis = 0
+        
+        for ticker in tickers:
+            purchase_info = portfolio_purchase_info.get(ticker, {})
+            avg_purchase = purchase_info.get('avg_purchase_price', 0)
+            quantity = purchase_info.get('total_quantity', 0)
+            current_price = current_prices.get(ticker, avg_purchase)
+            
+            cost_basis = avg_purchase * quantity
+            current_value = current_price * quantity
+            gain_loss_pct = ((current_price - avg_purchase) / avg_purchase * 100) if avg_purchase > 0 else 0
+            gain_loss_dollars = current_value - cost_basis
+            
+            total_current_value += current_value
+            total_cost_basis += cost_basis
+            
+            gain_indicator = "🟢" if gain_loss_dollars >= 0 else "🔴"
+            result += f"| {ticker} | ${avg_purchase:.2f} | ${current_price:.2f} | {gain_indicator} {gain_loss_pct:+.2f}% | {gain_indicator} ${gain_loss_dollars:+,.2f} |\n"
+        
+        portfolio_gain_loss_pct = ((total_current_value - total_cost_basis) / total_cost_basis * 100) if total_cost_basis > 0 else 0
+        portfolio_gain_loss_dollars = total_current_value - total_cost_basis
+        gain_indicator = "🟢" if portfolio_gain_loss_dollars >= 0 else "🔴"
+        
+        result += f"| **TOTAL** | ${total_cost_basis:,.2f} | ${total_current_value:,.2f} | {gain_indicator} {portfolio_gain_loss_pct:+.2f}% | {gain_indicator} ${portfolio_gain_loss_dollars:+,.2f} |\n"
+        
+        # Add "What If" Recommended Portfolio Analysis
+        result += f"\n---\n\n"
+        result += f"### 🔮 **What If: Recommended Portfolio Scenario**\n\n"
+        result += f"*Projection if you rebalance according to recommendations at current prices*\n\n"
+        
+        # Show rebalancing trades
+        result += f"**Rebalancing Trades Required:**\n\n"
+        trades_summary = []
+        total_trades_cost = 0
+        
+        for ticker in sorted(set(list(portfolio_weights.keys()) + list(normalized_weights.keys()))):
+            current_weight = portfolio_weights.get(ticker, 0)
+            recommended_weight = normalized_weights.get(ticker, 0)
+            
+            if abs(recommended_weight - current_weight) > 0.001:  # Only show if significant change
+                current_price = current_prices.get(ticker, portfolio_purchase_info.get(ticker, {}).get('avg_purchase_price', 0))
+                current_shares = portfolio_purchase_info.get(ticker, {}).get('total_quantity', 0)
+                current_position_value = total_current_value * current_weight
+                recommended_position_value = total_current_value * recommended_weight
+                
+                value_change = recommended_position_value - current_position_value
+                
+                if recommended_weight > current_weight:
+                    action = "BUY"
+                    shares_to_buy = (recommended_position_value - current_position_value) / current_price if current_price > 0 else 0
+                    trade_cost = shares_to_buy * current_price
+                    trades_summary.append({
+                        'ticker': ticker,
+                        'action': action,
+                        'shares': shares_to_buy,
+                        'value': trade_cost,
+                        'new_weight': recommended_weight * 100
+                    })
+                    total_trades_cost += trade_cost
+                elif recommended_weight < current_weight:
+                    action = "SELL"
+                    shares_to_sell = (current_position_value - recommended_position_value) / current_price if current_price > 0 else 0
+                    trade_proceeds = shares_to_sell * current_price
+                    trades_summary.append({
+                        'ticker': ticker,
+                        'action': action,
+                        'shares': shares_to_sell,
+                        'value': trade_proceeds,
+                        'new_weight': recommended_weight * 100
+                    })
+                    total_trades_cost -= trade_proceeds  # Negative because we're getting money back
+        
+        if trades_summary:
+            result += f"| Action | Ticker | Shares | Value ($) | New Weight |\n"
+            result += f"|--------|--------|--------|-----------|------------|\n"
+            for trade in trades_summary:
+                result += f"| {trade['action']} | {trade['ticker']} | {trade['shares']:.2f} | ${trade['value']:,.2f} | {trade['new_weight']:.2f}% |\n"
+            
+            net_cash_flow = -total_trades_cost  # Negative means money out, positive means money in
+            if abs(net_cash_flow) > 1:
+                if net_cash_flow > 0:
+                    result += f"\n*Net cash from trades: ${net_cash_flow:,.2f} (proceeds exceed purchases)*\n"
+                else:
+                    result += f"\n*Net cash required: ${abs(net_cash_flow):,.2f} (to execute all buys)*\n"
+        else:
+            result += f"*No significant rebalancing trades needed - portfolio is well-aligned with recommendations.*\n\n"
+        
+        # Calculate recommended portfolio value (same as current, since we're just rebalancing)
+        recommended_portfolio_value = total_current_value  # Rebalancing doesn't change total value immediately
+        
+        if cash_suggestion > 0.01:
+            cash_amount = total_current_value * cash_suggestion
+            result += f"\n*Cash allocation: ${cash_amount:,.2f} ({cash_suggestion * 100:.1f}%) - to be held in portfolio*\n"
+            recommended_portfolio_value = total_current_value  # Cash is part of total
+        
+        result += f"\n**Recommended Portfolio Composition Value:** ${recommended_portfolio_value:,.2f}\n"
+        result += f"**Current Portfolio Value:** ${total_current_value:,.2f}\n"
+        result += f"**Cost Basis:** ${total_cost_basis:,.2f}\n\n"
+        
+        # Projected performance assumes recommended portfolio maintains same return characteristics
+        # This is a simplified projection
+        result += f"**Note:** This shows portfolio structure if rebalanced. Future performance depends on:\n"
+        result += f"- Actual price movements of recommended holdings\n"
+        result += f"- Timing of trades\n"
+        result += f"- Market conditions\n"
+        result += f"*The recommended allocation aims to optimize risk-adjusted returns based on current regulatory and filing analysis.*\n"
+        
+        result += f"\n---\n\n"
+        result += f"**📊 Analysis Summary:**\n"
+        result += f"- Analyzed {len(filings_data)} SEC 10-K filings\n"
+        result += f"- Generated {len(recs)} recommendations\n"
+        result += f"- Priority breakdown: {len(critical)} critical/high, {len(medium)} medium, {len(low)} low\n\n"
+        
+        # Check API key status
+        api_key_status = "✅ Configured" if (os.getenv('OPENAI_API_KEY') or os.getenv('PERPLEXITY_API_KEY')) else "❌ Not configured"
+        result += f"**🔑 API Status:** {api_key_status}\n"
+        if api_key_status == "❌ Not configured":
+            result += f"\n**💡 To enable AI-powered recommendations:**\n"
+            result += f"1. Get an API key from:\n"
+            result += f"   - OpenAI: https://platform.openai.com/api-keys (recommended)\n"
+            result += f"   - Perplexity: https://www.perplexity.ai/settings/api\n"
+            result += f"2. Add to your `.env` file:\n"
+            result += f"   `OPENAI_API_KEY=sk-your-key-here`\n"
+            result += f"3. Restart the application and try again\n"
+        else:
+            result += f"\n**✅ AI recommendations are enabled and working!**\n"
+        
+        return result
+        
+    except Exception as e:
+        return f"❌ Error generating recommendations: {str(e)}"
 
 
 def generate_portfolio_recommendations(impact_json: str, portfolio_json: str) -> str:
@@ -627,12 +1235,15 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     
                     # Load existing portfolio
                     with gr.Accordion("📂 Load Existing Portfolio", open=False):
-                        portfolio_dropdown = gr.Dropdown(
-                            choices=["Select a portfolio..."] + list_portfolios_in_s3(),
-                            label="Select Portfolio from S3",
-                            value="Select a portfolio...",
-                            interactive=True
-                        )
+                        with gr.Row():
+                            portfolio_dropdown = gr.Dropdown(
+                                choices=["Select a portfolio..."] + list_portfolios_in_s3(),
+                                label="Select Portfolio from S3",
+                                value="Select a portfolio...",
+                                interactive=True,
+                                scale=4
+                            )
+                            refresh_dropdown_btn = gr.Button("🔄", variant="secondary", size="sm", scale=1, min_width=50)
                         load_portfolio_btn = gr.Button("Load Portfolio", variant="secondary")
                         load_portfolio_status = gr.Markdown()
                     
@@ -667,6 +1278,12 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     add_stock_status = gr.Markdown()
                     
                     # Save to S3
+                    gr.Markdown("### 💾 Save Portfolio to S3")
+                    portfolio_name_input = gr.Textbox(
+                        label="Portfolio Name (optional - will auto-generate if empty or duplicate)",
+                        placeholder="my_portfolio",
+                        value=""
+                    )
                     save_to_s3_btn = gr.Button("💾 Save Portfolio to S3", variant="primary")
                     save_to_s3_status = gr.Markdown()
                 
@@ -683,13 +1300,32 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     portfolio_summary = gr.Markdown()
                     
                     # Analysis section
-                    with gr.Accordion("📈 Analysis & Recommendations", open=False):
-                        gr.Markdown("Generate recommendations based on regulatory impact analysis.")
-                        recommend_btn = gr.Button("Generate Recommendations", variant="primary")
-                        recommendations_output = gr.Markdown(label="Recommendations")
+                    with gr.Accordion("📈 Portfolio Analysis & Recommendations", open=True):
+                        gr.Markdown("""
+                        **AI-Powered Portfolio Recommendations**
                         
-                        simulate_btn = gr.Button("Run Simulation", variant="secondary")
-                        simulation_output = gr.Markdown(label="Simulation Results")
+                        Analyzes SEC 10-K filings and regulatory directives for your portfolio companies to provide:
+                        - Risk assessment based on filing data and regulatory compliance
+                        - Actionable recommendations (Buy/Sell/Hold) considering regulatory impacts
+                        - Priority ranking (Critical/Medium/Low)
+                        - Weight adjustment suggestions normalized to 100%
+                        
+                        **Note:** Recommendations consider both company SEC filings and regulatory directives from data/directives/ in S3.
+                        """)
+                        
+                        filing_recommend_btn = gr.Button(
+                            "🤖 Generate AI Recommendations from SEC Filings", 
+                            variant="primary"
+                        )
+                        filing_recommendations_output = gr.Markdown(label="Recommendations")
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("**Regulatory Impact Analysis** (requires document analysis)")
+                        recommend_btn = gr.Button("Generate Recommendations", variant="secondary", size="sm")
+                        recommendations_output = gr.Markdown(label="Regulatory Recommendations", visible=False)
+                        
+                        simulate_btn = gr.Button("Run Simulation", variant="secondary", size="sm")
+                        simulation_output = gr.Markdown(label="Simulation Results", visible=False)
             
             # Event handlers
             # Load portfolio from dropdown
@@ -701,6 +1337,18 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 fn=lambda df: df,  # Update state
                 inputs=portfolio_display,
                 outputs=portfolio_df_state
+            )
+            
+            # Refresh dropdown button
+            def refresh_portfolio_dropdown():
+                """Refresh the portfolio dropdown list from S3."""
+                updated_choices = ["Select a portfolio..."] + list_portfolios_in_s3()
+                return gr.update(choices=updated_choices, value="Select a portfolio...")
+            
+            refresh_dropdown_btn.click(
+                fn=refresh_portfolio_dropdown,
+                inputs=None,
+                outputs=portfolio_dropdown
             )
             
             # Also load when dropdown changes
@@ -724,20 +1372,29 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 inputs=portfolio_display,
                 outputs=portfolio_df_state
             ).then(
-                fn=lambda df: f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}" if len(df) > 0 else "Portfolio is empty.",
+                fn=lambda df: f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}\n\n💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3." if len(df) > 0 else "Portfolio is empty.",
                 inputs=portfolio_df_state,
                 outputs=portfolio_summary
             )
             
             # Save portfolio to S3
+            def save_and_refresh(portfolio_df, portfolio_name):
+                """Save portfolio and return updated dropdown choices."""
+                result = save_portfolio_to_s3_handler(portfolio_df, portfolio_name)
+                updated_choices = ["Select a portfolio..."] + list_portfolios_in_s3()
+                return result, gr.update(choices=updated_choices, value="Select a portfolio...")
+            
             save_to_s3_btn.click(
-                fn=save_portfolio_to_s3_handler,
+                fn=save_and_refresh,
+                inputs=[portfolio_df_state, portfolio_name_input],
+                outputs=[save_to_s3_status, portfolio_dropdown]
+            )
+            
+            # AI Recommendations from SEC Filings (main feature)
+            filing_recommend_btn.click(
+                fn=generate_portfolio_recommendations_from_filings,
                 inputs=portfolio_df_state,
-                outputs=save_to_s3_status
-            ).then(
-                fn=lambda: ["Select a portfolio..."] + list_portfolios_in_s3(),
-                inputs=None,
-                outputs=portfolio_dropdown
+                outputs=filing_recommendations_output
             )
             
             # Analysis handlers (convert portfolio_df to JSON format for compatibility)

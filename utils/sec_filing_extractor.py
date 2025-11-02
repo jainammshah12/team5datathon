@@ -495,7 +495,7 @@ def save_extracted_sections_to_s3(ticker: str, sections: Dict[str, str],
     # Clean up old extraction files for this ticker and filing type in S3
     # This prevents duplicate files and ensures only the latest extraction is kept
     filing_type_normalized = filing_type.replace('-', '_')
-    s3_prefix = f"data/filings/{ticker}/"
+    s3_prefix = f"data/fillings/{ticker}/"
     
     try:
         # List existing files in S3 for this ticker
@@ -583,7 +583,7 @@ def save_extracted_sections_to_s3(ticker: str, sections: Dict[str, str],
     # Upload to S3 as single comprehensive JSON file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{filing_type.replace('-', '_')}_{timestamp}_complete.json"
-    s3_key = f"data/filings/{ticker}/{filename}"
+    s3_key = f"data/fillings/{ticker}/{filename}"
     
     # Convert to JSON string and encode to bytes
     json_content = json.dumps(output_data, indent=2, ensure_ascii=False)

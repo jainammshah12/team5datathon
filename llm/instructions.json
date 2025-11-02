@@ -55,7 +55,11 @@
     "instructions": [
       "Consider current regulatory impacts and company financials",
       "Suggest weight adjustments for affected positions",
-      "Recommend hedges or alternative investments",
+      "If recommending to decrease exposure to a sector, suggest alternative sectors with specific tickers and explain how they complement the current portfolio",
+      "Provide reasons for sector diversification (risk reduction, growth opportunities, regulatory resilience)",
+      "Recommend hedges or alternative investments only when beneficial",
+      "Cash should ONLY be recommended if there are truly no better investment options - prefer sector diversification",
+      "All recommended weights must sum to 100% (cash can be part of this if truly necessary)",
       "Provide risk-adjusted return expectations",
       "Include timeline for recommended actions"
     ],
@@ -68,6 +72,19 @@
           "recommended_weight": "percentage",
           "reason": "string",
           "priority": "high|medium|low"
+        }
+      ],
+      "sector_diversification": [
+        {
+          "reduce_sector": "string",
+          "alternative_sectors": [
+            {
+              "sector_name": "string",
+              "suggested_tickers": ["string"],
+              "reasons": "string",
+              "portfolio_complement": "string - how this complements current holdings"
+            }
+          ]
         }
       ],
       "overall_strategy": "string",
