@@ -316,13 +316,35 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
             status_msg = f"✅ Loaded portfolio '{filename}' with {len(df)} holdings\n\n"
             status_msg += "📄 **SEC Filing Extraction:**\n"
             
+            # Extract portfolio name from filename (e.g., "portfolio_name.csv" -> "portfolio_name")
+            portfolio_name = filename.replace('.csv', '').replace('portfolio_', '')
+            
             # Extract SEC filing data for each unique ticker
             print(f"[INFO] Starting SEC filing extraction for portfolio companies...")
             unique_tickers = df['Ticker'].unique()
             
             extraction_count = 0
+            skipped_count = 0
+            
             for ticker in unique_tickers:
-                try:                    
+                try:
+                    # First, check if extracted data already exists in S3
+                    # Check in data/filings/{ticker}/ for extracted JSON files
+                    from utils.s3_utils import list_files_in_s3
+                    extracted_prefix = f"data/filings/{ticker}/"
+                    existing_extractions = list_files_in_s3(extracted_prefix)
+                    
+                    # Filter for 10-K JSON files (should have "10_K" or "10k" in name)
+                    existing_10k_files = [f for f in existing_extractions if ('10_k' in f.lower() or '10k' in f.lower()) and f.endswith('.json')]
+                    
+                    if existing_10k_files:
+                        # Data already exists, skip extraction
+                        print(f"[INFO] Extracted data already exists for {ticker}, skipping extraction")
+                        status_msg += f"✓ {ticker}: Using existing extraction\n"
+                        skipped_count += 1
+                        continue
+                    
+                    # No existing data, proceed with extraction
                     filings = get_available_filings(ticker)
                     
                     if filings:
@@ -339,9 +361,6 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                                 html_content = read_file_from_s3(filing_path)
                                 
                                 if html_content:
-                                    # Extract portfolio name from filename (e.g., "portfolio_name.csv" -> "portfolio_name")
-                                    portfolio_name = filename.replace('.csv', '').replace('portfolio_', '')
-                                    
                                     # Extract sections using sec-parser and save to S3
                                     sections = extract_key_filing_sections(
                                         ticker=ticker,
@@ -374,8 +393,8 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                     print(f"[WARNING] Could not process {ticker}: {e}")
                     status_msg += f"❌ {ticker}: {str(e)}\n"
             
-            status_msg += f"\n💾 Extracted data saved to: `extracted_filings/` folder\n"
-            status_msg += f"📊 Ready for analysis: {extraction_count}/{len(unique_tickers)} companies"
+            status_msg += f"\n💾 Extracted data location: `data/filings/`\n"
+            status_msg += f"📊 Status: {extraction_count} extracted, {skipped_count} using existing data ({extraction_count + skipped_count}/{len(unique_tickers)} ready)"
             
             return df, status_msg
         else:
