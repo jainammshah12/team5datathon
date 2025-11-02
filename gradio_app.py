@@ -37,9 +37,10 @@ from utils.portfolio_storage import (
 )
 from utils.s3_utils import get_available_filings
 from utils.sec_filing_extractor import extract_key_filing_sections
-from utils.yfinance_fetcher import fetch_daily_stock_data
+from utils.yfinance_fetcher import fetch_daily_stock_data, fetch_stock_info
 from utils.filing_loader import load_portfolio_filings, get_relevant_sections_for_analysis
 from llm.llm_client import get_llm_client
+from datetime import datetime, date
 
 # Initialize LLM client
 llm_client = get_llm_client()
@@ -47,6 +48,10 @@ llm_client = get_llm_client()
 # Global cache for data
 _sp500_data = None
 _stock_performance = None
+
+# Price cache with daily expiration
+_price_cache = {}
+_price_cache_date = None
 
 def load_sp500_data() -> pd.DataFrame:
     """Load S&P 500 companies data (cached)."""
@@ -75,6 +80,148 @@ def load_stock_performance() -> pd.DataFrame:
                 "Solution": ["Please check AWS credentials in .env file or ensure local data/ folder exists"]
             })
     return _stock_performance
+
+def fetch_portfolio_prices(tickers: List[str], force_refresh: bool = False) -> Dict[str, float]:
+    """
+    Fetch current prices for multiple tickers with daily caching.
+    Prices are cached per day to limit API calls.
+    
+    Args:
+        tickers: List of stock symbols
+        force_refresh: If True, force refresh even if cache is valid
+    
+    Returns:
+        Dictionary mapping ticker -> current_price
+    """
+    global _price_cache, _price_cache_date
+    
+    today = date.today()
+    
+    # Check if cache is valid (same day)
+    if force_refresh or _price_cache_date != today:
+        # Clear cache if it's a new day
+        if _price_cache_date != today:
+            _price_cache = {}
+            _price_cache_date = today
+            print(f"[INFO] Price cache cleared for new day: {today}")
+        
+        # Fetch prices for tickers not in cache
+        tickers_to_fetch = [t for t in tickers if t not in _price_cache or force_refresh]
+        
+        if tickers_to_fetch:
+            print(f"[INFO] Fetching current prices for {len(tickers_to_fetch)} tickers...")
+            for ticker in tickers_to_fetch:
+                try:
+                    info = fetch_stock_info(ticker)
+                    current_price = info.get('Current Price')
+                    if current_price:
+                        _price_cache[ticker] = float(current_price)
+                        print(f"[INFO] {ticker}: ${current_price:.2f}")
+                    else:
+                        # Try to get from latest daily data if available
+                        from utils.s3_utils import read_csv_from_s3
+                        try:
+                            # Try to read from daily data in S3
+                            daily_data_key = f"data/daily_data/daily_stock_data_{today.strftime('%Y-%m-%d')}.csv"
+                            daily_df = read_csv_from_s3(daily_data_key)
+                            if not daily_df.empty:
+                                ticker_data = daily_df[daily_df['Ticker'] == ticker]
+                                if not ticker_data.empty:
+                                    latest = ticker_data.sort_values('Date').iloc[-1]
+                                    _price_cache[ticker] = float(latest['Close'])
+                                    print(f"[INFO] {ticker}: ${_price_cache[ticker]:.2f} (from daily data)")
+                                    continue
+                        except:
+                            pass
+                        
+                        # Fallback: use purchase price or 0
+                        _price_cache[ticker] = None
+                        print(f"[WARNING] Could not fetch current price for {ticker}")
+                except Exception as e:
+                    print(f"[WARNING] Error fetching price for {ticker}: {e}")
+                    _price_cache[ticker] = None
+        
+        print(f"[INFO] Price cache updated: {len(_price_cache)} tickers cached")
+    
+    # Return prices for requested tickers
+    return {ticker: _price_cache.get(ticker) for ticker in tickers}
+
+def calculate_portfolio_performance(portfolio_df: pd.DataFrame, current_prices: Dict[str, float] = None) -> Dict:
+    """
+    Calculate comprehensive portfolio performance metrics.
+    
+    Args:
+        portfolio_df: Portfolio DataFrame with Ticker, Price, Quantity, Date_Bought
+        current_prices: Optional dict of current prices (if None, will fetch)
+    
+    Returns:
+        Dictionary with performance metrics and enhanced DataFrame
+    """
+    if portfolio_df is None or len(portfolio_df) == 0:
+        return {
+            'df': pd.DataFrame(),
+            'summary': {},
+            'metrics': {}
+        }
+    
+    df = portfolio_df.copy()
+    
+    # Get current prices if not provided
+    if current_prices is None:
+        tickers = df['Ticker'].unique().tolist()
+        current_prices = fetch_portfolio_prices(tickers)
+    
+    # Add current price and calculate values
+    df['Current_Price'] = df['Ticker'].map(current_prices)
+    df['Current_Price'] = df['Current_Price'].fillna(df['Price'])  # Fallback to purchase price
+    
+    df['Purchase_Value'] = df['Price'] * df['Quantity']
+    df['Current_Value'] = df['Current_Price'] * df['Quantity']
+    df['Gain_Loss'] = df['Current_Value'] - df['Purchase_Value']
+    df['Gain_Loss_Pct'] = (df['Gain_Loss'] / df['Purchase_Value'] * 100).round(2)
+    
+    # Calculate portfolio-level metrics
+    total_cost = df['Purchase_Value'].sum()
+    total_value = df['Current_Value'].sum()
+    total_gain_loss = total_value - total_cost
+    total_gain_loss_pct = (total_gain_loss / total_cost * 100) if total_cost > 0 else 0
+    
+    # Find best and worst performers
+    best = df.loc[df['Gain_Loss_Pct'].idxmax()] if len(df) > 0 else None
+    worst = df.loc[df['Gain_Loss_Pct'].idxmin()] if len(df) > 0 else None
+    
+    # Calculate portfolio weights
+    df['Weight'] = (df['Current_Value'] / total_value * 100).round(2) if total_value > 0 else 0
+    
+    metrics = {
+        'total_cost': total_cost,
+        'total_value': total_value,
+        'total_gain_loss': total_gain_loss,
+        'total_gain_loss_pct': total_gain_loss_pct,
+        'num_positions': len(df),
+        'best_performer': {
+            'ticker': best['Ticker'] if best is not None else None,
+            'gain_pct': best['Gain_Loss_Pct'] if best is not None else None
+        },
+        'worst_performer': {
+            'ticker': worst['Ticker'] if worst is not None else None,
+            'gain_pct': worst['Gain_Loss_Pct'] if worst is not None else None
+        },
+        'cache_date': _price_cache_date.strftime('%Y-%m-%d') if _price_cache_date else None
+    }
+    
+    return {
+        'df': df,
+        'summary': {
+            'Total Cost Basis': f"${total_cost:,.2f}",
+            'Current Value': f"${total_value:,.2f}",
+            'Total Gain/Loss': f"${total_gain_loss:+,.2f}",
+            'Total Return': f"{total_gain_loss_pct:+.2f}%",
+            'Positions': len(df),
+            'Last Updated': metrics['cache_date']
+        },
+        'metrics': metrics
+    }
 
 def get_directive_list() -> List[str]:
     """Get list of available directives from S3."""
@@ -374,7 +521,8 @@ def add_stock_to_portfolio(
 
 def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame, portfolio_name: str = None) -> str:
     """
-    Save current portfolio to S3 with optional name.
+    Save portfolio to S3, preserving only original columns (Ticker, Price, Quantity, Date_Bought).
+    Strips out calculated columns like Current_Price, Gain_Loss, etc.
     If name not provided or name exists, auto-generates unique name.
     
     Returns:
@@ -384,6 +532,13 @@ def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame, portfolio_name: str
         return "⚠️ Portfolio is empty. Add some stocks first."
     
     try:
+        # Save only original columns (strip calculated columns)
+        required_cols = ['Ticker', 'Price', 'Quantity', 'Date_Bought']
+        if all(col in portfolio_df.columns for col in required_cols):
+            portfolio_df_to_save = portfolio_df[required_cols].copy()
+        else:
+            return "❌ Portfolio missing required columns. Cannot save."
+        
         # Generate filename if not provided
         if not portfolio_name or not portfolio_name.strip():
             portfolio_name = "portfolio"
@@ -411,15 +566,40 @@ def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame, portfolio_name: str
         else:
             status_msg = ""
         
-        success, error = save_portfolio_to_s3(portfolio_df, filename=filename)
+        success, error = save_portfolio_to_s3(portfolio_df_to_save, filename=filename)
         
         if success:
-            return status_msg + f"✅ Portfolio '{filename}' saved to S3 successfully! ({len(portfolio_df)} holdings)"
+            return status_msg + f"✅ Portfolio '{filename}' saved to S3 successfully! ({len(portfolio_df_to_save)} holdings)"
         else:
             return f"❌ Failed to save portfolio: {error}"
     except Exception as e:
         return f"❌ Error saving to S3: {str(e)}"
 
+
+def refresh_portfolio_prices_handler(portfolio_df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
+    """
+    Refresh prices for portfolio holdings.
+    
+    Returns:
+        Tuple of (enhanced_dataframe, status_message)
+    """
+    if portfolio_df is None or len(portfolio_df) == 0:
+        return pd.DataFrame(), "⚠️ Portfolio is empty"
+    
+    try:
+        # Force refresh prices
+        tickers = portfolio_df['Ticker'].unique().tolist()
+        current_prices = fetch_portfolio_prices(tickers, force_refresh=True)
+        
+        # Calculate performance
+        result = calculate_portfolio_performance(portfolio_df, current_prices)
+        
+        # Format status message
+        status = f"✅ Prices refreshed! Last updated: {result['summary'].get('Last Updated', 'N/A')}"
+        
+        return result['df'], status
+    except Exception as e:
+        return portfolio_df, f"⚠️ Error refreshing prices: {str(e)}"
 
 def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
     """
@@ -517,6 +697,18 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
             
             status_msg += f"\n💾 Extracted data location: `data/fillings/`\n"
             status_msg += f"📊 Status: {extraction_count} extracted, {skipped_count} using existing data ({extraction_count + skipped_count}/{len(unique_tickers)} ready)"
+            
+            # Automatically fetch prices and calculate performance
+            try:
+                unique_tickers_list = df['Ticker'].unique().tolist()
+                current_prices = fetch_portfolio_prices(unique_tickers_list)
+                result = calculate_portfolio_performance(df, current_prices)
+                df = result['df']  # Use enhanced DataFrame with performance metrics
+                status_msg += f"- **Current Value:** {result['summary'].get('Current Value', 'Calculating...')}\n"
+                status_msg += f"- **Total Return:** {result['summary'].get('Total Return', 'N/A')}\n"
+            except Exception as e:
+                print(f"[WARNING] Could not fetch prices on load: {e}")
+                # Continue with basic DataFrame
             
             return df, status_msg
         else:
@@ -1235,7 +1427,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     with gr.Group():
                         analysis_portfolio_display = gr.Dataframe(
                             label="Portfolio Holdings",
-                            headers=["Ticker", "Price", "Quantity", "Date_Bought"],
+                            headers=["Ticker", "Price", "Quantity", "Date_Bought", "Current_Price", "Current_Value", "Gain_Loss", "Gain_Loss_Pct", "Weight"],
                             interactive=False,
                             wrap=True,
                             max_height=400
@@ -1260,6 +1452,44 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
             # Portfolio state for analysis tab
             analysis_portfolio_df_state = gr.State(value=pd.DataFrame())
             
+            # Helper function for analysis tab summary
+            def update_analysis_summary(portfolio_df: pd.DataFrame) -> Tuple[str, gr.update]:
+                """Update analysis portfolio summary."""
+                if portfolio_df is None or len(portfolio_df) == 0:
+                    return "Portfolio is empty.", gr.update(interactive=False)
+                
+                try:
+                    if 'Current_Price' in portfolio_df.columns:
+                        result = calculate_portfolio_performance(portfolio_df)
+                        summary = result['summary']
+                        metrics = result['metrics']
+                        
+                        summary_text = f"""## 📈 Portfolio Summary
+
+**Total Holdings:** {summary.get('Positions', 0)} positions
+
+**Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
+**Current Value:** {summary.get('Current Value', 'N/A')}
+**Total Gain/Loss:** {summary.get('Total Gain/Loss', 'N/A')}
+**Total Return:** {summary.get('Total Return', 'N/A')}
+
+*Prices last updated: {summary.get('Last Updated', 'N/A')}*
+
+💡 Click "🤖 Generate AI Recommendations" below to get regulatory impact analysis."""
+                    else:
+                        total_cost = (portfolio_df['Price'] * portfolio_df['Quantity']).sum()
+                        summary_text = f"""## Portfolio Summary
+
+**Total Holdings:** {len(portfolio_df)} positions
+**Total Shares:** {portfolio_df['Quantity'].sum():,}
+**Total Cost:** ${total_cost:,.2f}
+
+💡 Portfolio loaded. Prices will be fetched automatically."""
+                    
+                    return summary_text, gr.update(interactive=len(portfolio_df) > 0)
+                except Exception as e:
+                    return f"Error: {str(e)}", gr.update(interactive=False)
+            
             # Event handlers for Analysis tab
             # Load & Analyze Portfolio button - loads portfolio from S3, extracts SEC filings, and displays summary
             load_analyze_portfolio_btn.click(
@@ -1271,7 +1501,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 inputs=analysis_portfolio_display,
                 outputs=analysis_portfolio_df_state
             ).then(
-                fn=lambda df: (f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}" if len(df) > 0 else "Portfolio is empty.", gr.update(interactive=len(df) > 0)),
+                fn=update_analysis_summary,
                 inputs=analysis_portfolio_df_state,
                 outputs=[analysis_portfolio_summary, filing_analysis_btn]
             )
@@ -1355,9 +1585,15 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 # Right column: Portfolio Display
                 with gr.Column(scale=1):
                     gr.Markdown("### 📊 Your Portfolio Holdings")
+                    
+                    # Refresh prices button
+                    with gr.Row():
+                        refresh_prices_btn = gr.Button("🔄 Refresh Prices", variant="secondary", size="sm")
+                        refresh_status = gr.Markdown("")
+                    
                     portfolio_display = gr.Dataframe(
                         label="Portfolio",
-                        headers=["Ticker", "Price", "Quantity", "Date_Bought"],
+                        headers=["Ticker", "Price", "Quantity", "Date_Bought", "Current_Price", "Current_Value", "Gain_Loss", "Gain_Loss_Pct", "Weight"],
                         interactive=False,
                         wrap=True
                     )
@@ -1366,6 +1602,48 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     
                     gr.Markdown("---")
                     gr.Markdown("💡 **To analyze your portfolio**, go to the **Analysis** tab")
+            
+            # Helper function to update portfolio summary
+            def update_portfolio_summary(portfolio_df: pd.DataFrame) -> str:
+                """Update portfolio summary with performance metrics."""
+                if portfolio_df is None or len(portfolio_df) == 0:
+                    return "Portfolio is empty."
+                
+                try:
+                    # Check if enhanced columns exist
+                    if 'Current_Price' in portfolio_df.columns:
+                        result = calculate_portfolio_performance(portfolio_df)
+                        summary = result['summary']
+                        metrics = result['metrics']
+                        
+                        summary_text = f"""## 📈 Portfolio Summary
+
+**Total Holdings:** {summary.get('Positions', 0)} positions
+
+**Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
+**Current Value:** {summary.get('Current Value', 'N/A')}
+**Total Gain/Loss:** {summary.get('Total Gain/Loss', 'N/A')}
+**Total Return:** {summary.get('Total Return', 'N/A')}
+
+**Best Performer:** {metrics.get('best_performer', {}).get('ticker', 'N/A')} ({metrics.get('best_performer', {}).get('gain_pct', 0):+.2f}%)
+**Worst Performer:** {metrics.get('worst_performer', {}).get('ticker', 'N/A')} ({metrics.get('worst_performer', {}).get('gain_pct', 0):+.2f}%)
+
+*Prices last updated: {summary.get('Last Updated', 'N/A')}*
+
+💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3."""
+                        return summary_text
+                    else:
+                        # Basic summary without prices
+                        total_cost = (portfolio_df['Price'] * portfolio_df['Quantity']).sum()
+                        return f"""## Portfolio Summary
+
+**Total Holdings:** {len(portfolio_df)} positions
+**Total Shares:** {portfolio_df['Quantity'].sum():,}
+**Total Cost:** ${total_cost:,.2f}
+
+💡 Click "🔄 Refresh Prices" to see current values and performance metrics."""
+                except Exception as e:
+                    return f"Error calculating summary: {str(e)}"
             
             # Event handlers
             # Load portfolio from dropdown
@@ -1377,6 +1655,32 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 fn=lambda df: df,  # Update state
                 inputs=portfolio_display,
                 outputs=portfolio_df_state
+            ).then(
+                fn=update_portfolio_summary,
+                inputs=portfolio_df_state,
+                outputs=portfolio_summary
+            )
+            
+            # Refresh prices button
+            refresh_prices_btn.click(
+                fn=lambda df: ("🔄 Refreshing prices...", gr.update(interactive=False)),
+                inputs=portfolio_df_state,
+                outputs=[refresh_status, refresh_prices_btn]
+            ).then(
+                fn=refresh_portfolio_prices_handler,
+                inputs=portfolio_df_state,
+                outputs=[portfolio_display, refresh_status]
+            ).then(
+                fn=lambda df: df,
+                inputs=portfolio_display,
+                outputs=portfolio_df_state
+            ).then(
+                fn=update_portfolio_summary,
+                inputs=portfolio_df_state,
+                outputs=portfolio_summary
+            ).then(
+                fn=lambda: gr.update(interactive=True),
+                outputs=refresh_prices_btn
             )
             
             # Add stock to portfolio
@@ -1389,7 +1693,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 inputs=portfolio_display,
                 outputs=portfolio_df_state
             ).then(
-                fn=lambda df: f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}\n\n💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3." if len(df) > 0 else "Portfolio is empty.",
+                fn=update_portfolio_summary,
                 inputs=portfolio_df_state,
                 outputs=portfolio_summary
             )
