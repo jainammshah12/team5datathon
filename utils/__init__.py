@@ -14,6 +14,13 @@ from .document_processor import (
     clean_text,
     extract_metadata
 )
+from .sec_filing_extractor import (
+    extract_key_filing_sections,
+    extract_filing_from_html,
+    save_extracted_sections_to_s3,
+    parse_sec_filing,
+    render_parsed_elements
+)
 
 __all__ = [
     'read_csv_from_s3',
@@ -26,6 +33,11 @@ __all__ = [
     'extract_text_from_html',
     'extract_text_from_xml',
     'clean_text',
-    'extract_metadata'
+    'extract_metadata',
+    'extract_key_filing_sections',
+    'extract_filing_from_html',
+    'save_extracted_sections_to_s3',
+    'parse_sec_filing',
+    'render_parsed_elements'
 ]
 

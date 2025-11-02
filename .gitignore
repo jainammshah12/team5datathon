@@ -2,3 +2,23 @@ data/
 sample/
 .env
 Datathon-Case-Official-EN.pdf
+Financial_Report_10KTHR4_2024 (1).xlsx
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Extracted SEC filings
+extracted_filings/

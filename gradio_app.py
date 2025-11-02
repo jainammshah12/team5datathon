@@ -33,6 +33,8 @@ from utils.portfolio_storage import (
     calculate_portfolio_value,
     get_portfolio_key
 )
+from utils.s3_utils import get_available_filings
+from utils.sec_filing_extractor import extract_key_filing_sections
 from utils.yfinance_fetcher import fetch_daily_stock_data
 from llm.llm_client import get_llm_client
 
@@ -299,7 +301,7 @@ def save_portfolio_to_s3_handler(portfolio_df: pd.DataFrame) -> str:
 
 def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
     """
-    Load portfolio from S3.
+    Load portfolio from S3 and extract SEC filing data for each ticker.
     
     Returns:
         Tuple of (DataFrame, status_message)
@@ -311,7 +313,71 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
         df, error = load_portfolio_from_s3(filename)
         
         if df is not None and len(df) > 0:
-            return df, f"✅ Loaded portfolio '{filename}' with {len(df)} holdings"
+            status_msg = f"✅ Loaded portfolio '{filename}' with {len(df)} holdings\n\n"
+            status_msg += "📄 **SEC Filing Extraction:**\n"
+            
+            # Extract SEC filing data for each unique ticker
+            print(f"[INFO] Starting SEC filing extraction for portfolio companies...")
+            unique_tickers = df['Ticker'].unique()
+            
+            extraction_count = 0
+            for ticker in unique_tickers:
+                try:                    
+                    filings = get_available_filings(ticker)
+                    
+                    if filings:
+                        # Find 10-K filing
+                        filing_10k = [f for f in filings if '10k' in f.lower()]
+                        
+                        if filing_10k:
+                            filing_path = filing_10k[0]
+                            print(f"[INFO] Found 10-K filing for {ticker}: {filing_path}")
+                            
+                            try:
+                                # Read the HTML content from S3
+                                from utils.s3_utils import read_file_from_s3
+                                html_content = read_file_from_s3(filing_path)
+                                
+                                if html_content:
+                                    # Extract portfolio name from filename (e.g., "portfolio_name.csv" -> "portfolio_name")
+                                    portfolio_name = filename.replace('.csv', '').replace('portfolio_', '')
+                                    
+                                    # Extract sections using sec-parser and save to S3
+                                    sections = extract_key_filing_sections(
+                                        ticker=ticker,
+                                        html_content=html_content,
+                                        portfolio_name=portfolio_name,
+                                        filing_type="10-K",
+                                        save_to_s3=True
+                                    )
+                                    
+                                    if sections.get('_extraction_success'):
+                                        status_msg += f"✅ {ticker}: Extracted and saved\n"
+                                        extraction_count += 1
+                                    else:
+                                        error_msg = sections.get('_error', 'Unknown error')
+                                        status_msg += f"⚠️ {ticker}: Extraction failed - {error_msg}\n"
+                                else:
+                                    status_msg += f"⚠️ {ticker}: Could not read filing from S3\n"
+                                    
+                            except Exception as e:
+                                print(f"[ERROR] Failed to extract {ticker}: {e}")
+                                status_msg += f"❌ {ticker}: {str(e)}\n"
+                        else:
+                            print(f"[WARNING] No 10-K filing found for {ticker}")
+                            status_msg += f"⚠️ {ticker}: No 10-K filing\n"
+                    else:
+                        print(f"[INFO] No filings in S3 for {ticker}")
+                        status_msg += f"ℹ️ {ticker}: No filings in S3\n"
+                        
+                except Exception as e:
+                    print(f"[WARNING] Could not process {ticker}: {e}")
+                    status_msg += f"❌ {ticker}: {str(e)}\n"
+            
+            status_msg += f"\n💾 Extracted data saved to: `extracted_filings/` folder\n"
+            status_msg += f"📊 Ready for analysis: {extraction_count}/{len(unique_tickers)} companies"
+            
+            return df, status_msg
         else:
             return pd.DataFrame(), f"⚠️ Portfolio '{filename}' is empty or not found"
     except Exception as e:
