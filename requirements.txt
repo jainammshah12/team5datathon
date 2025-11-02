@@ -12,3 +12,4 @@ deep-translator>=1.11.4
 openai>=1.0.0
 spacy>=3.6.0
 langdetect>=1.0.9
+plotly>=5.0.0

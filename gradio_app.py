@@ -46,6 +46,7 @@ from utils.filing_loader import (
 )
 from llm.llm_client import get_llm_client
 from datetime import datetime, date
+import plotly.graph_objects as go
 
 # Initialize LLM client
 llm_client = get_llm_client()
@@ -253,6 +254,111 @@ def calculate_portfolio_performance(
         },
         "metrics": metrics,
     }
+
+
+def create_portfolio_pie_chart(portfolio_df: pd.DataFrame) -> go.Figure:
+    """
+    Create a pie chart visualization of portfolio holdings by value.
+    
+    Args:
+        portfolio_df: Portfolio DataFrame (should have Current_Value column if prices are loaded)
+    
+    Returns:
+        Plotly Figure object for the pie chart
+    """
+    if portfolio_df is None or len(portfolio_df) == 0:
+        # Return empty chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No portfolio data available",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16)
+        )
+        fig.update_layout(
+            title="Portfolio Allocation",
+            showlegend=False
+        )
+        return fig
+    
+    try:
+        # Check if we have current values, otherwise use purchase values
+        if 'Current_Value' in portfolio_df.columns:
+            value_col = 'Current_Value'
+            chart_title = "Portfolio Allocation by Current Value"
+        elif 'Purchase_Value' in portfolio_df.columns:
+            value_col = 'Purchase_Value'
+            chart_title = "Portfolio Allocation by Purchase Value"
+        else:
+            # Calculate purchase value
+            portfolio_df = portfolio_df.copy()
+            portfolio_df['Purchase_Value'] = portfolio_df['Price'] * portfolio_df['Quantity']
+            value_col = 'Purchase_Value'
+            chart_title = "Portfolio Allocation by Purchase Value"
+        
+        # Aggregate by ticker (in case of multiple entries for same ticker)
+        ticker_values = portfolio_df.groupby('Ticker')[value_col].sum().sort_values(ascending=False)
+        
+        # Create labels with ticker and percentage
+        total_value = ticker_values.sum()
+        labels = []
+        values = []
+        
+        for ticker, value in ticker_values.items():
+            pct = (value / total_value * 100) if total_value > 0 else 0
+            labels.append(f"{ticker}<br>{pct:.1f}%")
+            values.append(value)
+        
+        # Create pie chart
+        fig = go.Figure(data=[go.Pie(
+            labels=[t.split('<br>')[0] for t in labels],  # Just ticker for labels
+            values=values,
+            hole=0.4,  # Donut chart style
+            textinfo='label+percent',
+            textposition='outside',
+            hovertemplate='<b>%{label}</b><br>' +
+                         'Value: $%{value:,.2f}<br>' +
+                         'Percentage: %{percent}<br>' +
+                         '<extra></extra>',
+            marker=dict(
+                line=dict(color='#FFFFFF', width=2)
+            )
+        )])
+        
+        fig.update_layout(
+            title=dict(
+                text=chart_title,
+                x=0.5,
+                font=dict(size=16)
+            ),
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="middle",
+                y=0.5,
+                xanchor="left",
+                x=1.1
+            ),
+            margin=dict(l=20, r=20, t=50, b=20),
+            height=400
+        )
+        
+        return fig
+        
+    except Exception as e:
+        # Return error chart
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Error creating chart: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14, color="red")
+        )
+        fig.update_layout(
+            title="Portfolio Allocation",
+            showlegend=False
+        )
+        return fig
 
 
 def get_directive_list() -> List[str]:
@@ -2252,14 +2358,69 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     )
 
                     portfolio_summary = gr.Markdown()
-
+                    
+                    # Pie chart visualization
+                    gr.Markdown("### 📊 Portfolio Allocation")
+                    portfolio_pie_chart = gr.Plot(label="Holdings Distribution")
+                    
                     gr.Markdown("---")
                     gr.Markdown(
                         "💡 **To analyze your portfolio**, go to the **Analysis** tab"
                     )
 
-            # Helper function to update portfolio summary
-            def update_portfolio_summary(portfolio_df: pd.DataFrame) -> str:
+            # Helper function to update portfolio summary and chart
+            def update_portfolio_summary(portfolio_df: pd.DataFrame) -> Tuple[str, go.Figure]:
+                """Update portfolio summary and pie chart."""
+                summary_text = "Portfolio is empty."
+                chart = create_portfolio_pie_chart(pd.DataFrame())
+                
+                if portfolio_df is None or len(portfolio_df) == 0:
+                    return summary_text, chart
+                
+                try:
+                    # Check if enhanced columns exist
+                    if 'Current_Price' in portfolio_df.columns:
+                        result = calculate_portfolio_performance(portfolio_df)
+                        summary = result['summary']
+                        metrics = result['metrics']
+                        
+                        summary_text = f"""## 📈 Portfolio Summary
+
+**Total Holdings:** {summary.get('Positions', 0)} positions
+
+**Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
+**Current Value:** {summary.get('Current Value', 'N/A')}
+**Total Gain/Loss:** {summary.get('Total Gain/Loss', 'N/A')}
+**Total Return:** {summary.get('Total Return', 'N/A')}
+
+**Best Performer:** {metrics.get('best_performer', {}).get('ticker', 'N/A')} ({metrics.get('best_performer', {}).get('gain_pct', 0):+.2f}%)
+**Worst Performer:** {metrics.get('worst_performer', {}).get('ticker', 'N/A')} ({metrics.get('worst_performer', {}).get('gain_pct', 0):+.2f}%)
+
+*Prices last updated: {summary.get('Last Updated', 'N/A')}*
+
+💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3."""
+                    else:
+                        # Basic summary without prices
+                        total_cost = (portfolio_df['Price'] * portfolio_df['Quantity']).sum()
+                        summary_text = f"""## Portfolio Summary
+
+**Total Holdings:** {len(portfolio_df)} positions
+**Total Shares:** {portfolio_df['Quantity'].sum():,}
+**Total Cost:** ${total_cost:,.2f}
+
+💡 Click "🔄 Refresh Prices" to see current values and performance metrics."""
+                    
+                    # Update chart
+                    chart = create_portfolio_pie_chart(portfolio_df)
+                    
+                except Exception as e:
+                    summary_text = f"Error calculating summary: {str(e)}"
+                    chart = create_portfolio_pie_chart(pd.DataFrame())
+                
+                return summary_text, chart
+            
+            # Original helper function for analysis tab (without chart)
+            def update_portfolio_summary_text_only(portfolio_df: pd.DataFrame) -> str:
                 """Update portfolio summary with performance metrics."""
                 if portfolio_df is None or len(portfolio_df) == 0:
                     return "Portfolio is empty."
@@ -2315,7 +2476,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
             ).then(
                 fn=update_portfolio_summary,
                 inputs=portfolio_df_state,
-                outputs=portfolio_summary,
+                outputs=[portfolio_summary, portfolio_pie_chart],
             )
 
             # Refresh prices button
@@ -2332,7 +2493,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
             ).then(
                 fn=update_portfolio_summary,
                 inputs=portfolio_df_state,
-                outputs=portfolio_summary,
+                outputs=[portfolio_summary, portfolio_pie_chart],
             ).then(
                 fn=lambda: gr.update(interactive=True), outputs=refresh_prices_btn
             )
@@ -2351,13 +2512,9 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
             ).then(
                 fn=lambda df: df, inputs=portfolio_display, outputs=portfolio_df_state
             ).then(
-                fn=lambda df: (
-                    f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}\n\n💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3."
-                    if len(df) > 0
-                    else "Portfolio is empty."
-                ),
+                fn=update_portfolio_summary,
                 inputs=portfolio_df_state,
-                outputs=portfolio_summary,
+                outputs=[portfolio_summary, portfolio_pie_chart],
             )
 
             # Save portfolio to S3
