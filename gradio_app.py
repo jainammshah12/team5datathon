@@ -5,6 +5,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import json
 import os
+import re
 
 # Import utility modules
 from utils.s3_utils import (
@@ -97,6 +98,579 @@ def load_stock_performance() -> pd.DataFrame:
                 }
             )
     return _stock_performance
+
+
+def get_filing_dates_for_ticker(ticker: str) -> Dict[str, str]:
+    """
+    Get filing dates from S3 filenames in data/filings/{ticker}/.
+    Tries multiple methods: filename parsing, file content parsing, and S3 metadata.
+    Handles case sensitivity by trying both uppercase and lowercase folder names.
+    
+    Returns dict with 'last_10k_date', 'last_10q_date', 'has_extracted_data'
+    """
+    result = {
+        'last_10k_date': None,
+        'last_10q_date': None,
+        'has_extracted_data': False,
+        'filing_type': None
+    }
+    
+    try:
+        # Try both uppercase and lowercase folder names (S3 is case-sensitive)
+        # Try uppercase first since user confirmed folder is uppercase
+        prefixes_to_try = [
+            f"data/filings/{ticker.upper()}/",  # Uppercase (most common)
+            f"data/filings/{ticker}/",  # Original case
+            f"data/filings/{ticker.lower()}/",  # Lowercase
+        ]
+        
+        all_files = []
+        prefix_used = None
+        
+        for prefix in prefixes_to_try:
+            try:
+                files = list_files_in_s3(prefix)
+                if files:
+                    all_files = files
+                    prefix_used = prefix
+                    print(f"[INFO] Found {len(all_files)} files for {ticker} in {prefix}")
+                    break
+            except Exception as e:
+                print(f"[DEBUG] No files found at {prefix}: {e}")
+                continue
+        
+        if not all_files:
+            print(f"[WARNING] No files found for {ticker} in any case variation")
+            return result
+        
+        # Separate JSON and HTML/XML files
+        json_files = [f for f in all_files if f.endswith('.json')]
+        html_xml_files = [f for f in all_files if f.endswith(('.html', '.htm', '.xml'))]
+        
+        result['has_extracted_data'] = len(json_files) > 0
+        
+        # Extract dates from filenames
+        dates_10k = []
+        dates_10q = []
+        filing_info_list = []
+        
+        # Process all files (HTML, XML, JSON)
+        print(f"[DEBUG] Processing {len(all_files)} files for {ticker}")
+        
+        for filename in all_files:
+            filename_lower = filename.lower()
+            filename_base = filename.split('/')[-1]  # Get just the filename part
+            
+            # Enhanced 10-K detection (check both full path and filename)
+            # Handle patterns like: 2025-01-30-10k-META.html, 10k-AAPL.html, 10-k-AAPL.html
+            is_10k = (
+                '10k' in filename_lower or 
+                '10-k' in filename_lower or 
+                '10_k' in filename_lower or
+                '-10k' in filename_lower or  # Pattern: ...-10k-...
+                '-10-k' in filename_lower or  # Pattern: ...-10-k-...
+                filename_base.startswith('10k') or
+                filename_base.startswith('10-k') or
+                re.search(r'[-_]10[kK][-_]', filename) is not None  # Pattern: -10k- or _10k_
+            )
+            
+            # Enhanced 10-Q detection
+            is_10q = (
+                '10q' in filename_lower or 
+                '10-q' in filename_lower or 
+                '10_q' in filename_lower or
+                '-10q' in filename_lower or  # Pattern: ...-10q-...
+                '-10-q' in filename_lower or  # Pattern: ...-10-q-...
+                filename_base.startswith('10q') or
+                filename_base.startswith('10-q') or
+                re.search(r'[-_]10[qQ][-_]', filename) is not None  # Pattern: -10q- or _10q_
+            )
+            
+            print(f"[DEBUG] File: {filename_base} | Is 10-K: {is_10k} | Is 10-Q: {is_10q}")
+            
+            if not (is_10k or is_10q):
+                continue
+            
+            # Try to extract date from filename using multiple patterns
+            date_extracted = None
+            
+            # Pattern 1: YYYY-MM-DD (e.g., 2025-01-30-10k-META.html)
+            date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+            if date_match:
+                date_extracted = date_match.group(0)
+                print(f"[DEBUG] Extracted date from Pattern 1 (YYYY-MM-DD): {date_extracted}")
+            
+            # Pattern 2: YYYYMMDD
+            if not date_extracted:
+                date_match = re.search(r'(\d{4})(\d{2})(\d{2})', filename)
+                if date_match:
+                    date_extracted = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+                    print(f"[DEBUG] Extracted date from Pattern 2 (YYYYMMDD): {date_extracted}")
+            
+            # Pattern 3: YYYYMM (assume first of month)
+            if not date_extracted:
+                date_match = re.search(r'(\d{4})(\d{2})(?!\d)', filename)
+                if date_match:
+                    date_extracted = f"{date_match.group(1)}-{date_match.group(2)}-01"
+                    print(f"[DEBUG] Extracted date from Pattern 3 (YYYYMM): {date_extracted}")
+            
+            # If still no date, try to extract from file content (for HTML/XML)
+            if not date_extracted and filename.endswith(('.html', '.htm', '.xml')):
+                try:
+                    print(f"[DEBUG] Attempting to extract date from file content: {filename}")
+                    content = read_file_from_s3(filename)
+                    
+                    # Look for filing date in content
+                    date_patterns = [
+                        r'FILED AS OF DATE[:\s]+(\d{2})/(\d{2})/(\d{4})',
+                        r'CONFORMED PERIOD OF REPORT[:\s]+(\d{8})',
+                        r'FILING DATE[:\s]+(\d{4}-\d{2}-\d{2})',
+                        r'DATE OF FILING[:\s]+(\d{4}-\d{2}-\d{2})',
+                        r'<FILING-DATE>(\d{4}-\d{2}-\d{2})</FILING-DATE>',
+                        r'CONFORMED PERIOD OF REPORT:\s*(\d{8})',
+                    ]
+                    
+                    for pattern in date_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            if '/' in match.group(0):
+                                # MM/DD/YYYY format
+                                parts = match.groups()
+                                date_extracted = f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+                            elif len(match.group(1)) == 8:
+                                # YYYYMMDD format
+                                date_str = match.group(1)
+                                date_extracted = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                            else:
+                                date_extracted = match.group(1)
+                            print(f"[DEBUG] Extracted date from file content: {date_extracted}")
+                            break
+                except Exception as e:
+                    print(f"[WARNING] Could not read file {filename} to extract date: {e}")
+            
+            # Store filing info
+            if is_10k:
+                if date_extracted:
+                    dates_10k.append(date_extracted)
+                    filing_info_list.append({'type': '10-K', 'date': date_extracted, 'filename': filename})
+                    result['filing_type'] = '10-K'
+                    print(f"[DEBUG] ✓ Added 10-K filing: {filename} with date {date_extracted}")
+                else:
+                    # Found 10-K file but couldn't extract date - still record it
+                    filing_info_list.append({'type': '10-K', 'date': None, 'filename': filename})
+                    if not result['filing_type']:
+                        result['filing_type'] = '10-K'
+                    print(f"[DEBUG] ⚠ Found 10-K file {filename} but could not extract date")
+            elif is_10q:
+                if date_extracted:
+                    dates_10q.append(date_extracted)
+                    filing_info_list.append({'type': '10-Q', 'date': date_extracted, 'filename': filename})
+                    if not result['filing_type']:
+                        result['filing_type'] = '10-Q'
+                    print(f"[DEBUG] ✓ Added 10-Q filing: {filename} with date {date_extracted}")
+                else:
+                    filing_info_list.append({'type': '10-Q', 'date': None, 'filename': filename})
+                    if not result['filing_type']:
+                        result['filing_type'] = '10-Q'
+                    print(f"[DEBUG] ⚠ Found 10-Q file {filename} but could not extract date")
+        
+        # Sort and get most recent dates
+        print(f"[DEBUG] Summary for {ticker}: Found {len(dates_10k)} 10-K dates, {len(dates_10q)} 10-Q dates")
+        print(f"[DEBUG] Filing info list: {[f['type'] for f in filing_info_list]}")
+        
+        if dates_10k:
+            dates_10k.sort(reverse=True)
+            result['last_10k_date'] = dates_10k[0]
+            print(f"[INFO] ✓ Found 10-K filing for {ticker} dated {dates_10k[0]}")
+        elif any(f['type'] == '10-K' for f in filing_info_list):
+            # We found 10-K files but no dates extracted - try S3 metadata
+            print(f"[INFO] Found 10-K file(s) for {ticker} but no dates extracted, trying S3 metadata...")
+            try:
+                from utils.s3_utils import s3_client, bucket_name
+                if s3_client:
+                    for filing in filing_info_list:
+                        if filing['type'] == '10-K':
+                            try:
+                                response = s3_client.head_object(Bucket=bucket_name, Key=filing['filename'])
+                                if 'LastModified' in response:
+                                    mod_date = response['LastModified'].strftime('%Y-%m-%d')
+                                    result['last_10k_date'] = mod_date
+                                    print(f"[INFO] Using S3 LastModified date for 10-K: {mod_date}")
+                                    break
+                            except Exception as e:
+                                print(f"[WARNING] Could not get S3 metadata for {filing['filename']}: {e}")
+            except Exception as e:
+                print(f"[WARNING] Could not access S3 metadata: {e}")
+        
+        if dates_10q:
+            dates_10q.sort(reverse=True)
+            result['last_10q_date'] = dates_10q[0]
+            print(f"[INFO] ✓ Found 10-Q filing for {ticker} dated {dates_10q[0]}")
+            
+            # If we have 10-Q and no 10-K date, or 10-Q is more recent
+            if not result['last_10k_date'] or (dates_10q[0] > result['last_10k_date']):
+                if not result['filing_type']:
+                    result['filing_type'] = '10-Q'
+        
+        # Final check: if we have filing files but no dates at all
+        if filing_info_list and not result['last_10k_date'] and not result['last_10q_date']:
+            print(f"[WARNING] Found {len(filing_info_list)} filing file(s) for {ticker} but could not extract dates")
+            print(f"[DEBUG] Files found: {[f['filename'].split('/')[-1] for f in filing_info_list]}")
+            # Try to get date from S3 object metadata (LastModified) as last resort
+            try:
+                from utils.s3_utils import s3_client, bucket_name
+                if s3_client and filing_info_list:
+                    # Get the most recent file's metadata
+                    latest_file = filing_info_list[0]['filename']
+                    response = s3_client.head_object(Bucket=bucket_name, Key=latest_file)
+                    if 'LastModified' in response:
+                        mod_date = response['LastModified'].strftime('%Y-%m-%d')
+                        if filing_info_list[0]['type'] == '10-K':
+                            result['last_10k_date'] = mod_date
+                        else:
+                            result['last_10q_date'] = mod_date
+                        print(f"[INFO] Using S3 LastModified date as fallback for {ticker}: {mod_date}")
+            except Exception as e:
+                print(f"[WARNING] Could not get S3 metadata for {ticker}: {e}")
+        
+        print(f"[INFO] Final filing info for {ticker}: 10-K={result['last_10k_date']}, 10-Q={result['last_10q_date']}, Type={result['filing_type']}, Extracted={result['has_extracted_data']}")
+            
+    except Exception as e:
+        print(f"[WARNING] Could not get filing dates for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return result
+
+
+def calculate_next_filing_date(last_filing_date: str, filing_type: str, fiscal_year_end: str = None, ticker: str = None) -> Tuple[str, str]:
+    """
+    Calculate expected next filing date with transparency about calculation method.
+    
+    Rules:
+    - 10-K: Due 60-90 days after fiscal year end (typically 75 days)
+    - 10-Q: Due 40-45 days after quarter end (typically 40 days)
+    
+    Args:
+        last_filing_date: Last filing date (YYYY-MM-DD)
+        filing_type: '10-K' or '10-Q'
+        fiscal_year_end: Fiscal year end month (e.g., '12' for December)
+        ticker: Ticker symbol (for logging)
+    
+    Returns:
+        Tuple of (expected_next_filing_date, calculation_method_description)
+    """
+    if not last_filing_date:
+        return None, "No last filing date provided"
+    
+    try:
+        from datetime import datetime, timedelta
+        
+        last_date = datetime.strptime(last_filing_date, '%Y-%m-%d')
+        today = datetime.now()
+        
+        if filing_type == '10-K':
+            # 10-K is filed annually, typically around the same time each year
+            # Companies usually file within 60-90 days of their fiscal year end,
+            # but if we have a historical filing date, we can estimate based on that pattern
+            
+            # Method 1: If we know fiscal year end, calculate from that (most accurate)
+            if fiscal_year_end:
+                try:
+                    fy_month = int(fiscal_year_end)
+                    current_year = today.year
+                    current_month = today.month
+                    
+                    # Determine next fiscal year end
+                    if current_month >= fy_month:
+                        # We're past this year's FY end, next FY end is next year
+                        next_fy_end = datetime(current_year + 1, fy_month, 1)
+                    else:
+                        # We're before this year's FY end, next FY end is this year
+                        next_fy_end = datetime(current_year, fy_month, 1)
+                    
+                    # 10-K due 60-90 days after fiscal year end (use 75 days as average)
+                    next_filing = next_fy_end + timedelta(days=75)
+                    method = f"Calculated from fiscal year end (month {fy_month}) + 75 days"
+                    
+                    if next_filing < today:
+                        # If calculated date is in the past, move to next year
+                        next_filing = datetime(next_filing.year + 1, next_filing.month, next_filing.day)
+                        method += " (adjusted to future date)"
+                    
+                    return next_filing.strftime('%Y-%m-%d'), method
+                except Exception as e:
+                    print(f"[WARNING] Error calculating from fiscal year end: {e}")
+            
+            # Method 2: Estimate based on last filing date pattern (companies file around same time each year)
+            # For example: If filed Jan 30, 2025, expect around late January 2026
+            last_year = last_date.year
+            last_month = last_date.month
+            last_day = last_date.day
+            
+            # Calculate how many days since last filing
+            days_since_last = (today - last_date).days
+            
+            # If last filing was recent (within last year), estimate next filing as same date next year
+            if days_since_last < 365:
+                # Next filing should be around the same time next year (late January = late January)
+                next_filing = datetime(last_year + 1, last_month, last_day)
+                method = f"Estimated: Last filing pattern ({last_filing_date}) → expected around same time next year"
+                
+                # Adjust if the date is in the past
+                if next_filing < today:
+                    next_filing = datetime(next_filing.year + 1, next_filing.month, next_filing.day)
+                    method += " (adjusted to future date)"
+                
+                # Add context about typical filing windows
+                if last_month == 1:  # January filing
+                    method += " | Typical: Late January for calendar-year companies"
+                elif last_month in [2, 3]:  # Feb/Mar filing
+                    method += f" | Typical: {last_month} month filing window"
+                
+            else:
+                # Last filing was more than a year ago, might be overdue
+                # Estimate as same date pattern but in current/next year
+                years_passed = days_since_last / 365.25
+                target_year = last_year + int(years_passed) + 1
+                next_filing = datetime(target_year, last_month, last_day)
+                
+                if next_filing < today:
+                    next_filing = datetime(next_filing.year + 1, next_filing.month, next_filing.day)
+                
+                method = f"Estimated: Based on historical filing pattern ({last_filing_date}) → expected {next_filing.strftime('%Y-%m-%d')} | Note: Filing may be overdue or calculation needs adjustment"
+            
+            return next_filing.strftime('%Y-%m-%d'), method
+            
+        elif filing_type == '10-Q':
+            # 10-Q is filed quarterly, typically 40-45 days after quarter end
+            # Quarters end: Mar 31, Jun 30, Sep 30, Dec 31
+            # Estimate next quarter end based on last filing date
+            
+            # Calculate which quarter the last filing was in
+            last_year = last_date.year
+            last_month = last_date.month
+            
+            # Determine quarter
+            if last_month in [1, 2, 3]:
+                quarter_end = datetime(last_year, 3, 31)
+                next_quarter_end = datetime(last_year, 6, 30)
+            elif last_month in [4, 5, 6]:
+                quarter_end = datetime(last_year, 6, 30)
+                next_quarter_end = datetime(last_year, 9, 30)
+            elif last_month in [7, 8, 9]:
+                quarter_end = datetime(last_year, 9, 30)
+                next_quarter_end = datetime(last_year, 12, 31)
+            else:  # 10, 11, 12
+                quarter_end = datetime(last_year, 12, 31)
+                next_quarter_end = datetime(last_year + 1, 3, 31)
+            
+            # If we're past the next quarter end, move to following quarter
+            if today > next_quarter_end:
+                if next_quarter_end.month == 12:
+                    next_quarter_end = datetime(next_quarter_end.year + 1, 3, 31)
+                elif next_quarter_end.month == 3:
+                    next_quarter_end = datetime(next_quarter_end.year, 6, 30)
+                elif next_quarter_end.month == 6:
+                    next_quarter_end = datetime(next_quarter_end.year, 9, 30)
+                else:
+                    next_quarter_end = datetime(next_quarter_end.year, 12, 31)
+            
+            # 10-Q due 40 days after quarter end
+            next_filing = next_quarter_end + timedelta(days=40)
+            method = f"Estimated: Next quarter end + 40 days (10-Q filing deadline)"
+            
+            # If calculated date is in the past, it's likely overdue
+            if next_filing < today:
+                method += f" | WARNING: Calculated date ({next_filing.strftime('%Y-%m-%d')}) is in the past - filing may be overdue or calculation needs adjustment"
+                # Estimate next quarter
+                if next_filing.month <= 3:
+                    next_quarter_end = datetime(next_filing.year, 6, 30)
+                elif next_filing.month <= 6:
+                    next_quarter_end = datetime(next_filing.year, 9, 30)
+                elif next_filing.month <= 9:
+                    next_quarter_end = datetime(next_filing.year, 12, 31)
+                else:
+                    next_quarter_end = datetime(next_filing.year + 1, 3, 31)
+                next_filing = next_quarter_end + timedelta(days=40)
+                method += f" | Adjusted to: {next_filing.strftime('%Y-%m-%d')}"
+            
+            return next_filing.strftime('%Y-%m-%d'), method
+            
+    except Exception as e:
+        print(f"[WARNING] Could not calculate next filing date for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, f"Error calculating next filing date: {str(e)}"
+    
+    return None, "Unknown filing type"
+
+
+def build_filing_status_dataframe(tickers: List[str] = None) -> pd.DataFrame:
+    """
+    Build comprehensive DataFrame with filing status for specified tickers.
+    If no tickers provided, builds a quick initial table from S3 data only (no yfinance calls).
+    
+    Args:
+        tickers: List of tickers to process. If None, builds quick table for all companies.
+    """
+    try:
+        sp500_df = load_sp500_data()
+        if sp500_df.empty or 'Error' in sp500_df.columns:
+            return pd.DataFrame({
+                'Error': ['Could not load S&P 500 data'],
+                'Solution': ['Check AWS credentials or data availability']
+            })
+        
+        results = []
+        
+        # If no tickers specified, return empty DataFrame (user must select tickers)
+        if tickers is None:
+            return pd.DataFrame(columns=[
+                'Ticker', 'Company', 'Sector', 'Industry', 
+                'Last Filing Date', 'Filing Type', 'Extracted',
+                'Next Filing (Expected)', 'Days Until Next'
+            ])
+        
+        # If specific tickers provided, fetch detailed info (including yfinance)
+        # First, verify all tickers are in S&P 500
+        if 'Ticker' in sp500_df.columns:
+            sp500_ticker_list = sp500_df['Ticker'].unique().tolist()
+        elif 'Symbol' in sp500_df.columns:
+            sp500_ticker_list = sp500_df['Symbol'].unique().tolist()
+        else:
+            sp500_ticker_list = sp500_df.iloc[:, 0].unique().tolist()
+        
+        # Filter to only S&P 500 tickers
+        valid_tickers = [t.upper() for t in tickers if str(t).upper() in [str(st).upper() for st in sp500_ticker_list]]
+        
+        if not valid_tickers:
+            return pd.DataFrame({
+                'Error': ['No valid S&P 500 tickers found'],
+                'Solution': ['Please select valid S&P 500 tickers only']
+            })
+        
+        print(f"[INFO] Building detailed filing status for {len(valid_tickers)} S&P 500 ticker(s)...")
+        
+        for ticker in valid_tickers:
+            try:
+                # Get filing info
+                filing_info = get_filing_dates_for_ticker(ticker)
+                
+                # Get company info from yfinance (with timeout protection)
+                try:
+                    company_info = fetch_stock_info(ticker)
+                    company_name = company_info.get('Company Name', ticker)
+                    sector = company_info.get('Sector', 'N/A')
+                    industry = company_info.get('Industry', 'N/A')
+                    fiscal_year_end = None
+                except Exception as e:
+                    print(f"[WARNING] Could not fetch company info for {ticker}: {e}")
+                    company_name = ticker
+                    sector = 'N/A'
+                    industry = 'N/A'
+                    fiscal_year_end = None
+                
+                # Determine last filing date and type (prefer 10-K over 10-Q if both exist)
+                last_10k = filing_info.get('last_10k_date')
+                last_10q = filing_info.get('last_10q_date')
+                
+                if last_10k and last_10q:
+                    # Use the more recent one
+                    try:
+                        date_10k = datetime.strptime(last_10k, '%Y-%m-%d')
+                        date_10q = datetime.strptime(last_10q, '%Y-%m-%d')
+                        if date_10k >= date_10q:
+                            last_filing_date = last_10k
+                            filing_type = '10-K'
+                        else:
+                            last_filing_date = last_10q
+                            filing_type = '10-Q'
+                    except:
+                        last_filing_date = last_10k or last_10q
+                        filing_type = filing_info.get('filing_type', 'N/A')
+                elif last_10k:
+                    last_filing_date = last_10k
+                    filing_type = '10-K'
+                elif last_10q:
+                    last_filing_date = last_10q
+                    filing_type = '10-Q'
+                else:
+                    last_filing_date = None
+                    filing_type = 'N/A'
+                
+                # Calculate next filing date with transparency
+                next_filing_date = None
+                next_filing_method = None
+                if last_filing_date and filing_type and filing_type != 'N/A':
+                    next_filing_date, next_filing_method = calculate_next_filing_date(
+                        last_filing_date, 
+                        filing_type, 
+                        fiscal_year_end,
+                        ticker
+                    )
+                    if next_filing_method:
+                        print(f"[INFO] Next filing calculation for {ticker}: {next_filing_method}")
+                
+                # Calculate days until next filing
+                days_until = None
+                if next_filing_date:
+                    try:
+                        next_date = datetime.strptime(next_filing_date, '%Y-%m-%d')
+                        days_until = (next_date - datetime.now()).days
+                        if days_until < 0:
+                            print(f"[WARNING] Calculated next filing date ({next_filing_date}) for {ticker} is in the past")
+                    except Exception as e:
+                        print(f"[WARNING] Error parsing next filing date: {e}")
+                        days_until = None
+                
+                # Status
+                extracted_status = 'Yes' if filing_info.get('has_extracted_data') else 'No'
+                
+                # Store calculation method in a note (for transparency)
+                next_filing_display = next_filing_date or 'N/A'
+                if next_filing_date and next_filing_method and 'WARNING' in next_filing_method:
+                    next_filing_display += " ⚠️"
+                
+                results.append({
+                    'Ticker': ticker,
+                    'Company': company_name,
+                    'Sector': sector,
+                    'Industry': industry,
+                    'Last Filing Date': last_filing_date or 'N/A',
+                    'Filing Type': filing_type,
+                    'Extracted': extracted_status,
+                    'Next Filing (Expected)': next_filing_display,
+                    'Days Until Next': days_until if days_until is not None else 'N/A'
+                })
+                
+                # Log calculation details for transparency
+                if next_filing_method:
+                    print(f"[INFO] Next filing calculation method for {ticker}: {next_filing_method}")
+                
+            except Exception as e:
+                print(f"[WARNING] Error processing {ticker}: {e}")
+                results.append({
+                    'Ticker': ticker,
+                    'Company': ticker,
+                    'Sector': 'N/A',
+                    'Industry': 'N/A',
+                    'Last Filing Date': 'N/A',
+                    'Filing Type': 'N/A',
+                    'Extracted': 'No',
+                    'Next Filing (Expected)': 'N/A',
+                    'Days Until Next': 'N/A'
+                })
+        
+        df = pd.DataFrame(results)
+        return df
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to build filing status: {e}")
+        return pd.DataFrame({
+            'Error': [f'Failed to build filing status: {str(e)}'],
+            'Solution': ['Check S3 connectivity and data availability']
+        })
 
 
 def fetch_portfolio_prices(
@@ -1030,7 +1604,7 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                         continue
 
                     # No existing data, proceed with extraction
-                    # Look for raw SEC filing HTML files in data/fillings/{ticker}/
+                    # Look for raw SEC filing HTML files in data/filings/{ticker}/
                     filings = get_raw_filings(ticker)
 
                     # If no filings in S3, check local file system as fallback
@@ -1068,7 +1642,7 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                         import glob
                         import os
 
-                        local_filing_dir = f"data/fillings/{ticker}"
+                        local_filing_dir = f"data/filings/{ticker}"
                         if os.path.exists(local_filing_dir):
                             # Look for 10-K HTML files locally
                             local_10k_files = (
@@ -2672,18 +3246,376 @@ with gr.Blocks(
 
         # Tab 4: Data Explorer
         with gr.Tab("📊 Data Explorer"):
-            gr.Markdown("### S&P 500 Companies")
-            sp500_display = gr.Dataframe(label="S&P 500 Composition", interactive=False)
-
-            gr.Markdown("### Stock Performance")
-            performance_display = gr.Dataframe(
-                label="Stock Performance Data", interactive=False
+            gr.Markdown(
+                """
+                ## 📊 SEC Filing Data Explorer
+                
+                Track S&P 500 companies and their SEC filing status:
+                - **Last Filing Dates**: When companies last filed 10-K (annual) or 10-Q (quarterly) reports
+                - **Expected Next Filings**: Calculated based on SEC filing deadlines
+                - **Extraction Status**: Whether filing data has been extracted and is available for AI analysis
+                - **Company Metadata**: Sector, industry, and company information
+                
+                **Use Cases:**
+                - 📅 Track upcoming filing deadlines
+                - 🔍 Identify companies with extracted filing data ready for analysis
+                - 📊 Filter by sector to analyze industry trends
+                - ✅ Monitor which companies are up-to-date with SEC requirements
+                """
             )
-
-            # Load data when tab is opened
+            
+            with gr.Row():
+                with gr.Column(scale=2):
+                    gr.Markdown("### 📈 S&P 500 Company Filing Status")
+                    with gr.Row():
+                        refresh_filing_status_btn = gr.Button(
+                            "🔄 Refresh Filing Status", variant="primary", size="lg"
+                        )
+                        gr.Markdown("*This may take a few minutes to load company data*")
+                    
+                    filing_status_display = gr.Dataframe(
+                        label="Filing Status Dashboard",
+                        interactive=False,
+                        wrap=True,
+                        column_widths=["8%", "15%", "12%", "15%", "12%", "10%", "10%", "12%", "6%"]
+                    )
+                
+                with gr.Column(scale=1):
+                    gr.Markdown("### 🔍 Filter & Search")
+                    ticker_search = gr.Dropdown(
+                        label="Search Ticker (type to narrow options)",
+                        choices=[],
+                        value=None,
+                        allow_custom_value=False,
+                        interactive=True,
+                        filterable=True,
+                        info="Start typing to search S&P 500 tickers"
+                    )
+                    sector_filter = gr.Dropdown(
+                        label="Filter by Sector",
+                        choices=["All"] + ["Technology", "Healthcare", "Financial Services", 
+                                         "Consumer Cyclical", "Communication Services", "Industrials",
+                                         "Consumer Defensive", "Energy", "Utilities", "Real Estate",
+                                         "Basic Materials"],
+                        value="All",
+                        interactive=True
+                    )
+                    extraction_filter = gr.Dropdown(
+                        label="Filter by Extraction Status",
+                        choices=["All", "Extracted Only", "Not Extracted"],
+                        value="All",
+                        interactive=True
+                    )
+                    filter_btn = gr.Button("🔍 Apply Filters", variant="secondary")
+                    clear_filters_btn = gr.Button("🔄 Clear Filters", variant="secondary")
+                    
+                    gr.Markdown("### 📋 Quick Statistics")
+                    filing_stats = gr.Markdown()
+            
+            gr.Markdown("---")
+            gr.Markdown("### 📊 Full S&P 500 Company List")
+            sp500_display = gr.Dataframe(
+                label="S&P 500 Composition", 
+                interactive=False
+            )
+            
+            # State to hold the full filing status DataFrame
+            filing_status_state = gr.State(value=pd.DataFrame())
+            
+            # Functions for Data Explorer
+            def get_sp500_ticker_list():
+                """Get list of all S&P 500 tickers for dropdown."""
+                try:
+                    sp500_df = load_sp500_data()
+                    if sp500_df.empty or 'Error' in sp500_df.columns:
+                        return []
+                    
+                    if 'Ticker' in sp500_df.columns:
+                        tickers = sp500_df['Ticker'].unique().tolist()
+                    elif 'Symbol' in sp500_df.columns:
+                        tickers = sp500_df['Symbol'].unique().tolist()
+                    else:
+                        tickers = sp500_df.iloc[:, 0].unique().tolist()
+                    
+                    return sorted([str(t).upper() for t in tickers if pd.notna(t)])
+                except:
+                    return []
+            
+            def get_initial_data():
+                """Get initial data without scanning filings."""
+                # Return empty DataFrame, placeholder stats, and ticker list
+                empty_df = pd.DataFrame(columns=[
+                    'Ticker', 'Company', 'Sector', 'Industry', 
+                    'Last Filing Date', 'Filing Type', 'Extracted',
+                    'Next Filing (Expected)', 'Days Until Next'
+                ])
+                
+                stats = """
+                **📊 Filing Status Summary:**
+                - **Total Companies:** 0
+                
+                *💡 Please select a ticker from the dropdown above to view filing information*
+                """
+                
+                ticker_list = get_sp500_ticker_list()
+                
+                # Return empty choices initially (dropdown will be populated but not selected)
+                return empty_df, stats, empty_df, gr.update(choices=ticker_list, value=None)
+            
+            def refresh_filing_status():
+                """Refresh the filing status dashboard with full details."""
+                df = build_filing_status_dataframe(tickers=None)  # Quick refresh
+                
+                # Generate stats (same as initial load)
+                total = len(df)
+                if total == 0:
+                    return df, "**No data available**"
+                
+                with_data = len(df[df['Extracted'] == 'Yes']) if 'Extracted' in df.columns else 0
+                without_data = total - with_data
+                has_10k = len(df[df['Filing Type'] == '10-K']) if 'Filing Type' in df.columns else 0
+                has_10q = len(df[df['Filing Type'] == '10-Q']) if 'Filing Type' in df.columns else 0
+                no_filing = total - has_10k - has_10q
+                
+                upcoming_count = 0
+                if 'Days Until Next' in df.columns:
+                    for days_str in df['Days Until Next']:
+                        if days_str != 'N/A':
+                            try:
+                                days = int(days_str)
+                                if 0 <= days <= 60:
+                                    upcoming_count += 1
+                            except:
+                                pass
+                
+                pct_with = (with_data/total*100) if total > 0 else 0
+                
+                stats = f"""
+                **📊 Filing Status Summary:**
+                - **Total Companies:** {total}
+                - **With Extracted Data:** {with_data} ({pct_with:.1f}%)
+                - **Without Extracted Data:** {without_data} ({100-pct_with:.1f}%)
+                
+                **📄 Filing Types:**
+                - **10-K (Annual):** {has_10k} companies
+                - **10-Q (Quarterly):** {has_10q} companies
+                - **No Filing Data:** {no_filing} companies
+                
+                **📅 Upcoming Filings:**
+                - **Due in Next 60 Days:** {upcoming_count} companies
+                
+                *💡 Tip: Select a ticker to load detailed company information*
+                """
+                
+                return df, stats
+            
+            def load_ticker_info(selected_ticker: str, current_df: pd.DataFrame):
+                """Load filing information for a specific S&P 500 ticker."""
+                if not selected_ticker or not selected_ticker.strip():
+                    return current_df, "**Please select a ticker**"
+                
+                ticker = selected_ticker.strip().upper()
+                
+                # Verify ticker is in S&P 500
+                sp500_tickers = get_sp500_ticker_list()
+                if ticker not in sp500_tickers:
+                    return current_df, f"**❌ {ticker} is not in S&P 500. Please select a valid S&P 500 ticker.**"
+                
+                # Check if ticker info already exists in current DataFrame
+                if not current_df.empty and 'Ticker' in current_df.columns:
+                    existing_row = current_df[current_df['Ticker'] == ticker]
+                    if not existing_row.empty:
+                        # Already loaded, just show stats
+                        total = len(current_df)
+                        with_data = len(current_df[current_df['Extracted'] == 'Yes']) if 'Extracted' in current_df.columns else 0
+                        stats = f"""
+                        **📊 Filing Status Summary:**
+                        - **Total Companies Loaded:** {total}
+                        - **With Extracted Data:** {with_data}
+                        
+                        *💡 {ticker} information already displayed in the table above*
+                        """
+                        return current_df, stats
+                
+                # Fetch filing info for this ticker only (S&P 500 ticker)
+                try:
+                    print(f"[INFO] Loading filing information for {ticker}...")
+                    detailed_df = build_filing_status_dataframe(tickers=[ticker])
+                    
+                    if detailed_df.empty or 'Error' in detailed_df.columns:
+                        error_msg = detailed_df.iloc[0].get('Solution', 'Unknown error') if not detailed_df.empty else 'Unknown error'
+                        return current_df, f"**❌ Error loading {ticker}: {error_msg}**"
+                    
+                    # Add or update the row in current DataFrame
+                    updated_df = current_df.copy()
+                    
+                    if not updated_df.empty:
+                        mask = updated_df['Ticker'] == ticker
+                        if mask.any():
+                            # Update existing row
+                            for col in detailed_df.columns:
+                                if col in updated_df.columns:
+                                    updated_df.loc[mask, col] = detailed_df.iloc[0][col]
+                        else:
+                            # Add new row
+                            updated_df = pd.concat([updated_df, detailed_df], ignore_index=True)
+                    else:
+                        updated_df = detailed_df
+                    
+                    # Generate stats
+                    total = len(updated_df)
+                    with_data = len(updated_df[updated_df['Extracted'] == 'Yes']) if 'Extracted' in updated_df.columns else 0
+                    without_data = total - with_data
+                    
+                    has_10k = len(updated_df[updated_df['Filing Type'] == '10-K']) if 'Filing Type' in updated_df.columns else 0
+                    has_10q = len(updated_df[updated_df['Filing Type'] == '10-Q']) if 'Filing Type' in updated_df.columns else 0
+                    
+                    company_name = detailed_df.iloc[0].get('Company', ticker)
+                    sector = detailed_df.iloc[0].get('Sector', 'N/A')
+                    last_filing = detailed_df.iloc[0].get('Last Filing Date', 'N/A')
+                    filing_type = detailed_df.iloc[0].get('Filing Type', 'N/A')
+                    extracted = detailed_df.iloc[0].get('Extracted', 'No')
+                    next_filing = detailed_df.iloc[0].get('Next Filing (Expected)', 'N/A')
+                    days_until = detailed_df.iloc[0].get('Days Until Next', 'N/A')
+                    
+                    # Get calculation method if available
+                    calculation_note = ""
+                    if last_filing != 'N/A' and filing_type != 'N/A':
+                        try:
+                            _, method = calculate_next_filing_date(last_filing, filing_type, None, ticker)
+                            if method:
+                                if 'Note:' in method or 'WARNING' in method:
+                                    calculation_note = f"\n\n**📝 Calculation Method:** {method}"
+                                else:
+                                    calculation_note = f"\n\n**📝 Calculation:** {method}"
+                        except Exception as e:
+                            calculation_note = f"\n\n**⚠️ Could not calculate next filing date:** {str(e)}"
+                    
+                    stats = f"""
+                    **✅ Loaded filing information for {ticker}**
+                    
+                    **Company Details:**
+                    - **Company:** {company_name}
+                    - **Sector:** {sector}
+                    
+                    **Filing Information:**
+                    - **Last Filing Date:** {last_filing}
+                    - **Filing Type:** {filing_type}
+                    - **Extracted:** {extracted}
+                    - **Next Filing (Expected):** {next_filing}
+                    - **Days Until Next:** {days_until if days_until != 'N/A' else 'N/A'}
+                    {calculation_note}
+                    
+                    **📊 Summary:**
+                    - **Total Companies Loaded:** {total}
+                    - **With Extracted Data:** {with_data}
+                    - **10-K Filings:** {has_10k}
+                    - **10-Q Filings:** {has_10q}
+                    """
+                    
+                    return updated_df, stats
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error loading {ticker}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return current_df, f"**❌ Error loading {ticker}: {str(e)}**"
+            
+            def filter_filing_status(ticker_input: str, sector: str, extraction: str, status_df: pd.DataFrame):
+                """Filter the filing status DataFrame."""
+                if status_df is None or status_df.empty or 'Error' in status_df.columns:
+                    return status_df, "**Please wait for initial data to load**"
+                
+                filtered_df = status_df.copy()
+                
+                # Filter by ticker (supports partial match)
+                if ticker_input and ticker_input.strip():
+                    ticker_upper = ticker_input.strip().upper()
+                    filtered_df = filtered_df[
+                        filtered_df['Ticker'].str.upper().str.contains(ticker_upper, na=False)
+                    ]
+                
+                # Filter by sector
+                if sector and sector != "All":
+                    filtered_df = filtered_df[filtered_df['Sector'] == sector]
+                
+                # Filter by extraction status
+                if extraction == "Extracted Only":
+                    filtered_df = filtered_df[filtered_df['Extracted'] == 'Yes']
+                elif extraction == "Not Extracted":
+                    filtered_df = filtered_df[filtered_df['Extracted'] == 'No']
+                
+                # Generate updated stats
+                total = len(filtered_df)
+                if total == 0:
+                    return filtered_df, "**No companies match the filters**"
+                
+                with_data = len(filtered_df[filtered_df['Extracted'] == 'Yes']) if 'Extracted' in filtered_df.columns else 0
+                without_data = total - with_data
+                
+                pct_with = (with_data/total*100) if total > 0 else 0
+                pct_without = (without_data/total*100) if total > 0 else 0
+                
+                stats = f"""
+                **📊 Filtered Results:**
+                - **Matching Companies:** {total}
+                - **With Extracted Data:** {with_data} ({pct_with:.1f}%)
+                - **Without Extracted Data:** {without_data} ({pct_without:.1f}%)
+                """
+                
+                return filtered_df, stats
+            
+            def clear_all_filters():
+                """Clear all filters and return to full dataset."""
+                return None, "All", "All"
+            
+            # Event handlers
+            ticker_search.change(
+                fn=lambda ticker, df: load_ticker_info(ticker, df) if ticker else (df, "**Please select a ticker to view filing information**"),
+                inputs=[ticker_search, filing_status_state],
+                outputs=[filing_status_display, filing_stats]
+            ).then(
+                fn=lambda df: df,
+                inputs=filing_status_display,
+                outputs=filing_status_state
+            )
+            
+            filter_btn.click(
+                fn=lambda ticker, sector, ext, df: filter_filing_status(
+                    ticker or "", sector, ext, df
+                ),
+                inputs=[ticker_search, sector_filter, extraction_filter, filing_status_state],
+                outputs=[filing_status_display, filing_stats]
+            )
+            
+            clear_filters_btn.click(
+                fn=clear_all_filters,
+                outputs=[ticker_search, sector_filter, extraction_filter]
+            ).then(
+                fn=lambda df: (df, "**Filters cleared**"),
+                inputs=filing_status_state,
+                outputs=[filing_status_display, filing_stats]
+            )
+            
+            refresh_filing_status_btn.click(
+                fn=refresh_filing_status,
+                outputs=[filing_status_display, filing_stats]
+            ).then(
+                fn=lambda df: df,
+                inputs=filing_status_display,
+                outputs=filing_status_state
+            )
+            
+            # Load initial data on tab open (NO filing scan)
+            def load_initial_data():
+                """Load initial data without scanning filings."""
+                sp500_data = load_sp500_data()
+                filing_df, filing_stats_text, filing_df_copy, ticker_list = get_initial_data()
+                return sp500_data, filing_df, filing_stats_text, filing_df_copy, ticker_list
+            
             demo.load(
-                fn=lambda: (load_sp500_data(), load_stock_performance()),
-                outputs=[sp500_display, performance_display],
+                fn=load_initial_data,
+                outputs=[sp500_display, filing_status_display, filing_stats, filing_status_state, ticker_search],
             )
 
 if __name__ == "__main__":

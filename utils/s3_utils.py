@@ -175,10 +175,10 @@ def get_available_directives() -> list:
 
 
 def get_raw_filings(ticker: str = None) -> list:
-    """Get list of raw SEC filing HTML/XML files from S3 data/fillings/."""
+    """Get list of raw SEC filing HTML/XML files from S3 data/filings/."""
     if ticker:
-        return list_files_in_s3(f"data/fillings/{ticker}/")
-    return list_files_in_s3("data/fillings/")
+        return list_files_in_s3(f"data/filings/{ticker}/")
+    return list_files_in_s3("data/filings/")
 
 
 def get_available_filings(ticker: str = None) -> list:
