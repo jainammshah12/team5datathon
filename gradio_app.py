@@ -1201,26 +1201,94 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
         # Tab 2: Analysis
         with gr.Tab("🔍 Analysis"):
             with gr.Row():
-                with gr.Column():
-                    gr.Markdown("### Document Analysis")
-                    analyze_btn = gr.Button("Extract Entities", variant="primary")
-                    entities_output = gr.Markdown(label="Extracted Entities")
+                # Left Column: Portfolio Management
+                with gr.Column(scale=1, min_width=450):
+                    gr.Markdown("""
+                    ### 🤖 AI-Powered Portfolio Recommendations
                     
-                with gr.Column():
-                    gr.Markdown("### Impact Evaluation")
-                    evaluate_btn = gr.Button("Evaluate Impact on S&P 500", variant="primary")
-                    impact_output = gr.Markdown(label="Impact Analysis")
+                    Analyzes SEC 10-K filings and regulatory directives for your portfolio companies to provide:
+                    - Risk assessment based on filing data and regulatory compliance
+                    - Actionable recommendations (Buy/Sell/Hold) considering regulatory impacts
+                    - Priority ranking (Critical/Medium/Low)
+                    - Weight adjustment suggestions normalized to 100%
+                    
+                    **Note:** Recommendations consider both company SEC filings and regulatory directives from data/directives/ in S3.
+                    """)
+                    
+                    gr.Markdown("---")
+                    
+                    # Portfolio Selection and Details (merged)
+                    gr.Markdown("### 📊 Analyze Portfolio")
+                    analysis_portfolio_dropdown = gr.Dropdown(
+                        choices=["Select a portfolio..."] + list_portfolios_in_s3(),
+                        label="Select Portfolio from S3",
+                        value="Select a portfolio...",
+                        interactive=True
+                    )
+                    load_analyze_portfolio_btn = gr.Button(
+                        "📊 Load & Analyze Portfolio", 
+                        variant="secondary",
+                        size="lg"
+                    )
+                    load_analysis_portfolio_status = gr.Markdown()
+                    
+                    with gr.Group():
+                        analysis_portfolio_display = gr.Dataframe(
+                            label="Portfolio Holdings",
+                            headers=["Ticker", "Price", "Quantity", "Date_Bought"],
+                            interactive=False,
+                            wrap=True,
+                            max_height=400
+                        )
+                        analysis_portfolio_summary = gr.Markdown()
+                
+                # Right Column: AI Recommendations (full height)
+                with gr.Column(scale=1, min_width=450):
+                    gr.Markdown("### 🎯 AI Recommendations")
+                    filing_analysis_btn = gr.Button(
+                        "🤖 Generate AI Recommendations", 
+                        variant="primary",
+                        size="lg",
+                        interactive=False
+                    )
+                    with gr.Group():
+                        filing_analysis_output = gr.Markdown(
+                            label="Recommendations",
+                            elem_classes=["scrollable-output"]
+                        )
             
-            analyze_btn.click(
-                fn=analyze_document,
-                inputs=document_preview,
-                outputs=entities_output
+            # Portfolio state for analysis tab
+            analysis_portfolio_df_state = gr.State(value=pd.DataFrame())
+            
+            # Event handlers for Analysis tab
+            # Load & Analyze Portfolio button - loads portfolio from S3, extracts SEC filings, and displays summary
+            load_analyze_portfolio_btn.click(
+                fn=load_portfolio_from_s3_handler,
+                inputs=analysis_portfolio_dropdown,
+                outputs=[analysis_portfolio_display, load_analysis_portfolio_status]
+            ).then(
+                fn=lambda df: df,
+                inputs=analysis_portfolio_display,
+                outputs=analysis_portfolio_df_state
+            ).then(
+                fn=lambda df: (f"## Portfolio Summary\n\n**Total Holdings:** {len(df)} positions\n\n**Total Shares:** {df['Quantity'].sum() if len(df) > 0 else 0}\n\n**Total Cost:** ${(df['Price'] * df['Quantity']).sum():,.2f}" if len(df) > 0 else "Portfolio is empty.", gr.update(interactive=len(df) > 0)),
+                inputs=analysis_portfolio_df_state,
+                outputs=[analysis_portfolio_summary, filing_analysis_btn]
             )
             
-            evaluate_btn.click(
-                fn=evaluate_impact,
-                inputs=entities_output,
-                outputs=impact_output
+            # Generate AI Recommendations button
+            filing_analysis_btn.click(
+                fn=lambda: ("## 🔄 Generating AI Recommendations...\n\nPlease wait while we analyze your portfolio. This may take a moment.\n\n- Loading SEC filing data...\n- Analyzing regulatory compliance...\n- Generating recommendations...", gr.update(interactive=False, value="⏳ Generating...")),
+                inputs=None,
+                outputs=[filing_analysis_output, filing_analysis_btn]
+            ).then(
+                fn=generate_portfolio_recommendations_from_filings,
+                inputs=analysis_portfolio_df_state,
+                outputs=filing_analysis_output
+            ).then(
+                fn=lambda: gr.update(interactive=True, value="🤖 Generate AI Recommendations"),
+                inputs=None,
+                outputs=filing_analysis_btn
             )
         
         # Tab 3: Portfolio
@@ -1235,15 +1303,12 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     
                     # Load existing portfolio
                     with gr.Accordion("📂 Load Existing Portfolio", open=False):
-                        with gr.Row():
-                            portfolio_dropdown = gr.Dropdown(
-                                choices=["Select a portfolio..."] + list_portfolios_in_s3(),
-                                label="Select Portfolio from S3",
-                                value="Select a portfolio...",
-                                interactive=True,
-                                scale=4
-                            )
-                            refresh_dropdown_btn = gr.Button("🔄", variant="secondary", size="sm", scale=1, min_width=50)
+                        portfolio_dropdown = gr.Dropdown(
+                            choices=["Select a portfolio..."] + list_portfolios_in_s3(),
+                            label="Select Portfolio from S3",
+                            value="Select a portfolio...",
+                            interactive=True
+                        )
                         load_portfolio_btn = gr.Button("Load Portfolio", variant="secondary")
                         load_portfolio_status = gr.Markdown()
                     
@@ -1299,33 +1364,8 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     
                     portfolio_summary = gr.Markdown()
                     
-                    # Analysis section
-                    with gr.Accordion("📈 Portfolio Analysis & Recommendations", open=True):
-                        gr.Markdown("""
-                        **AI-Powered Portfolio Recommendations**
-                        
-                        Analyzes SEC 10-K filings and regulatory directives for your portfolio companies to provide:
-                        - Risk assessment based on filing data and regulatory compliance
-                        - Actionable recommendations (Buy/Sell/Hold) considering regulatory impacts
-                        - Priority ranking (Critical/Medium/Low)
-                        - Weight adjustment suggestions normalized to 100%
-                        
-                        **Note:** Recommendations consider both company SEC filings and regulatory directives from data/directives/ in S3.
-                        """)
-                        
-                        filing_recommend_btn = gr.Button(
-                            "🤖 Generate AI Recommendations from SEC Filings", 
-                            variant="primary"
-                        )
-                        filing_recommendations_output = gr.Markdown(label="Recommendations")
-                        
-                        gr.Markdown("---")
-                        gr.Markdown("**Regulatory Impact Analysis** (requires document analysis)")
-                        recommend_btn = gr.Button("Generate Recommendations", variant="secondary", size="sm")
-                        recommendations_output = gr.Markdown(label="Regulatory Recommendations", visible=False)
-                        
-                        simulate_btn = gr.Button("Run Simulation", variant="secondary", size="sm")
-                        simulation_output = gr.Markdown(label="Simulation Results", visible=False)
+                    gr.Markdown("---")
+                    gr.Markdown("💡 **To analyze your portfolio**, go to the **Analysis** tab")
             
             # Event handlers
             # Load portfolio from dropdown
@@ -1335,29 +1375,6 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 outputs=[portfolio_display, load_portfolio_status]
             ).then(
                 fn=lambda df: df,  # Update state
-                inputs=portfolio_display,
-                outputs=portfolio_df_state
-            )
-            
-            # Refresh dropdown button
-            def refresh_portfolio_dropdown():
-                """Refresh the portfolio dropdown list from S3."""
-                updated_choices = ["Select a portfolio..."] + list_portfolios_in_s3()
-                return gr.update(choices=updated_choices, value="Select a portfolio...")
-            
-            refresh_dropdown_btn.click(
-                fn=refresh_portfolio_dropdown,
-                inputs=None,
-                outputs=portfolio_dropdown
-            )
-            
-            # Also load when dropdown changes
-            portfolio_dropdown.change(
-                fn=lambda filename: load_portfolio_from_s3_handler(filename) if filename and filename != "Select a portfolio..." else (pd.DataFrame(), ""),
-                inputs=portfolio_dropdown,
-                outputs=[portfolio_display, load_portfolio_status]
-            ).then(
-                fn=lambda df: df if isinstance(df, pd.DataFrame) else pd.DataFrame(),
                 inputs=portfolio_display,
                 outputs=portfolio_df_state
             )
@@ -1388,31 +1405,6 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                 fn=save_and_refresh,
                 inputs=[portfolio_df_state, portfolio_name_input],
                 outputs=[save_to_s3_status, portfolio_dropdown]
-            )
-            
-            # AI Recommendations from SEC Filings (main feature)
-            filing_recommend_btn.click(
-                fn=generate_portfolio_recommendations_from_filings,
-                inputs=portfolio_df_state,
-                outputs=filing_recommendations_output
-            )
-            
-            # Analysis handlers (convert portfolio_df to JSON format for compatibility)
-            recommend_btn.click(
-                fn=lambda df, impact: generate_portfolio_recommendations(
-                    impact,
-                    json.dumps({"holdings": df.to_dict('records')}) if len(df) > 0 else ""
-                ) if len(df) > 0 else "⚠️ Please add stocks to your portfolio first.",
-                inputs=[portfolio_df_state, impact_output],
-                outputs=recommendations_output
-            )
-            
-            simulate_btn.click(
-                fn=lambda df: run_simulation(
-                    json.dumps({"holdings": df.to_dict('records')}) if len(df) > 0 else ""
-                ),
-                inputs=portfolio_df_state,
-                outputs=simulation_output
             )
         
         # Tab 4: Data Explorer

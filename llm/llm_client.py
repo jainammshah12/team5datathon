@@ -19,7 +19,7 @@ _response_cache = {}
 class LLMClient:
     """Client for interacting with LLM services."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "default"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """
         Initialize LLM client.
         

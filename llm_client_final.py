@@ -20,7 +20,7 @@ _response_cache = {}
 class LLMClient:
     """Client for interacting with LLM services."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "default"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """
         Initialize LLM client.
         
@@ -426,7 +426,7 @@ Consider:
                 
                 client = openai.OpenAI(api_key=openai_key)
                 response = client.chat.completions.create(
-                    model=self.model if self.model != "default" else "gpt-4o-mini",
+                    model=self.model or "gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": INSTRUCTIONS.get('system_prompt', '')},
                         {"role": "user", "content": prompt}
