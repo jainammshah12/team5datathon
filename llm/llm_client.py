@@ -710,6 +710,25 @@ Consider:
         #     return response
 
         return "LLM API call not yet implemented. Please configure your API key."
+def summarize_document(self, text: str) -> str:
+   
+    if not text or not text.strip():
+        return "No content to summarize."
+
+    prompt = (
+        "You are a financial analyst. Summarize the document for a datathon demo.\n"
+        "Output concise Markdown with:\n"
+        "• One-line title (jurisdiction + doc type if inferable)\n"
+        "• 3–6 bullet key points (who is affected, action type, dates, penalties/compliance, sectors, geographies)\n"
+        "• A short 'Implications' line for portfolio analysis.\n"
+        "Be specific but brief; no extra prose.\n\n"
+        f"Document:\n{text[:6000]}\n"
+    )
+    try:
+        summary = self._call_llm_api(prompt, max_tokens=500)
+        return summary.strip()
+    except Exception as e:
+        return f"_Summary unavailable: {e}_"
 
 
 def get_llm_client() -> LLMClient:
