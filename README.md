@@ -3,20 +3,24 @@
 AI-powered tool that analyzes regulatory documents and evaluates their financial impact on S&P 500 companies.
 
 ## Team Members
-- Jainam Shah 
-- Hubert Lefebvre 
-- Jose Del Portillo Neira 
+
+- Jainam Shah
+- Hubert Lefebvre
+- Jose Del Portillo Neira
 - Bhavya Ruparelia
 
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 2. Configure AWS S3
+
 Create `.env` file with your AWS credentials:
+
 ```env
 AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
@@ -26,19 +30,23 @@ S3_BUCKET_NAME=your-bucket-name
 ```
 
 **Note:** If your Access Key starts with `ASIA`, you need the session token. Get it with:
+
 ```bash
 aws configure export-credentials --profile default
 ```
 
 ### 3. Launch Application
+
 ```bash
 python gradio_app.py
 ```
+
 Access at: **http://localhost:7860**
 
 ## 📋 Features
 
 ### 📄 Document Management
+
 - **Upload** regulatory documents (.html, .xml, .txt, .md) to S3
 - **Automatic overwrite** - Duplicate files are replaced automatically
 - **Auto-load** - Uploaded documents load immediately
@@ -46,6 +54,7 @@ Access at: **http://localhost:7860**
 - All documents stored in S3 bucket at `data/directives/`
 
 ### 📑 SEC Filing Extraction (NEW)
+
 - **Automated extraction** of key sections from 10-K/10-Q filings
 - **18 critical sections** extracted:
   - Business, Risk Factors, Cybersecurity, Properties, Legal Proceedings
@@ -59,12 +68,14 @@ Access at: **http://localhost:7860**
 - Supports both HTML and XML formats
 
 ### 🔍 Analysis (Placeholder)
+
 - Extract entities from regulatory documents
 - Evaluate financial impact on S&P 500 companies
 - Identify affected sectors and companies
-- *Note: LLM integration pending - implement in `llm/llm_client.py`*
+- _Note: LLM integration pending - implement in `llm/llm_client.py`_
 
 ### 💼 Portfolio Management
+
 - **Create and manage** multiple portfolios
 - **Save to S3** - Portfolios stored as CSV files
 - **Auto-extract SEC filings** when loading portfolio
@@ -74,6 +85,7 @@ Access at: **http://localhost:7860**
 - Risk assessment
 
 ### 📊 Data Explorer
+
 - S&P 500 company composition
 - Stock performance data
 - SEC filings per company
@@ -100,6 +112,7 @@ gradio_app.py           # Main Gradio interface
 ## 🔑 AWS Permissions Required
 
 Your IAM user/role needs:
+
 - `s3:ListBucket` - List files in bucket
 - `s3:GetObject` - Read files
 - `s3:PutObject` - Upload files
@@ -108,17 +121,20 @@ Your IAM user/role needs:
 ## 💡 Usage
 
 ### Document Management
+
 1. **Upload Document**: Select file → Click "📤 Upload to S3" → Auto-loads
 2. **View Document**: Select from dropdown → Click "Load Selected Document"
 3. **Refresh List**: Click "🔄 Refresh Document List" after external changes
 
 ### Portfolio Management
+
 1. **Create Portfolio**: Add stocks → Click "💾 Save Portfolio to S3"
 2. **Load Portfolio**: Select portfolio → Auto-extracts SEC filings
 3. **SEC Extraction**: Automatically extracts 18 key sections per company
 4. **View Extractions**: Check S3 at `extracted_filings/{portfolio}/`
 
 ### Analysis (when LLM implemented)
+
 1. Load document → Click analysis buttons
 2. Get regulatory impact scores
 3. Receive portfolio recommendations
@@ -160,6 +176,7 @@ s3://your-bucket/
 ```
 
 ### Extracted Filing JSON Structure
+
 ```json
 {
   "metadata": {
@@ -204,16 +221,19 @@ s3://your-bucket/
 ## 🔧 Next Steps
 
 1. **Implement LLM Integration** - Add API calls in `llm/llm_client.py`
+
    - Cross-reference SEC filings with regulatory documents
    - Generate portfolio recommendations based on regulatory changes
    - Assess regulatory impact scores per company
 
 2. **Enhance Analysis Features**
+
    - Connect analysis buttons to LLM functions
    - Use extracted SEC sections for regulatory impact modeling
    - Compare risk factors with regulatory requirements
 
 3. **Add Visualizations**
+
    - Charts for impact analysis
    - Portfolio risk heatmaps
    - Regulatory compliance dashboards
@@ -266,11 +286,13 @@ sections = data['sections']
 ## 🐛 Troubleshooting
 
 ### S3 Connection Issues
+
 - Verify AWS credentials in `.env` file
 - Check that `AWS_SESSION_TOKEN` is set if using temporary credentials
 - Test with: `aws s3 ls s3://your-bucket/`
 
 ### SEC Parser Not Available
+
 - The tool works without `sec-parser` (uses BeautifulSoup only)
 - For enhanced parsing, install: `pip install sec-parser`
 - Optional dependency for semantic element extraction

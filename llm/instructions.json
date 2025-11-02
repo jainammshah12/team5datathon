@@ -1,6 +1,5 @@
 {
   "system_prompt": "You are a financial analyst AI assistant specialized in analyzing regulatory documents and their potential impact on S&P 500 companies. Your role is to extract key entities, identify potential financial impacts, and provide actionable insights.",
-  
   "entity_extraction": {
     "task": "Extract key entities and information from regulatory documents",
     "instructions": [
@@ -14,14 +13,23 @@
       "document_type": "string",
       "jurisdiction": "string",
       "effective_date": "string",
-      "key_requirements": ["list of strings"],
-      "affected_sectors": ["list of strings"],
-      "monetary_impacts": ["list of objects with amount, currency, description"],
-      "deadlines": ["list of objects with date and requirement"],
-      "mentioned_entities": ["list of strings"]
+      "key_requirements": [
+        "list of strings"
+      ],
+      "affected_sectors": [
+        "list of strings"
+      ],
+      "monetary_impacts": [
+        "list of objects with amount, currency, description"
+      ],
+      "deadlines": [
+        "list of objects with date and requirement"
+      ],
+      "mentioned_entities": [
+        "list of strings"
+      ]
     }
   },
-  
   "impact_analysis": {
     "task": "Analyze potential financial impact on S&P 500 companies",
     "instructions": [
@@ -49,7 +57,6 @@
       }
     }
   },
-  
   "portfolio_recommendation": {
     "task": "Generate portfolio adjustment recommendations",
     "instructions": [
@@ -80,7 +87,9 @@
           "alternative_sectors": [
             {
               "sector_name": "string",
-              "suggested_tickers": ["string"],
+              "suggested_tickers": [
+                "string"
+              ],
               "reasons": "string",
               "portfolio_complement": "string - how this complements current holdings"
             }
@@ -91,7 +100,6 @@
       "risk_assessment": "string"
     }
   },
-  
   "simulation": {
     "task": "Run portfolio simulation with regulatory impacts",
     "instructions": [
@@ -116,4 +124,3 @@
     }
   }
 }
-

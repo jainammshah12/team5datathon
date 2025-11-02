@@ -10,3 +10,5 @@ tqdm>=4.65.0
 sec-parser>=0.50.0
 deep-translator>=1.11.4
 openai>=1.0.0
+spacy>=3.6.0
+langdetect>=1.0.9
