@@ -128,7 +128,7 @@ Your IAM user/role needs:
 
 ### Portfolio Management
 
-1. **Create Portfolio**: Add stocks → Click "💾 Save Portfolio to S3"
+1. **Create Portfolio**: Add stocks → Click "💾 Save Portfolio"
 2. **Load Portfolio**: Select portfolio → Auto-extracts SEC filings
 3. **SEC Extraction**: Automatically extracts 18 key sections per company
 4. **View Extractions**: Check S3 at `extracted_filings/{portfolio}/`

@@ -259,10 +259,10 @@ def calculate_portfolio_performance(
 def create_portfolio_pie_chart(portfolio_df: pd.DataFrame) -> go.Figure:
     """
     Create a pie chart visualization of portfolio holdings by value.
-    
+
     Args:
         portfolio_df: Portfolio DataFrame (should have Current_Value column if prices are loaded)
-    
+
     Returns:
         Plotly Figure object for the pie chart
     """
@@ -271,93 +271,93 @@ def create_portfolio_pie_chart(portfolio_df: pd.DataFrame) -> go.Figure:
         fig = go.Figure()
         fig.add_annotation(
             text="No portfolio data available",
-            xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False,
-            font=dict(size=16)
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(size=16),
         )
-        fig.update_layout(
-            title="Portfolio Allocation",
-            showlegend=False
-        )
+        fig.update_layout(title="Portfolio Allocation", showlegend=False)
         return fig
-    
+
     try:
         # Check if we have current values, otherwise use purchase values
-        if 'Current_Value' in portfolio_df.columns:
-            value_col = 'Current_Value'
+        if "Current_Value" in portfolio_df.columns:
+            value_col = "Current_Value"
             chart_title = "Portfolio Allocation by Current Value"
-        elif 'Purchase_Value' in portfolio_df.columns:
-            value_col = 'Purchase_Value'
+        elif "Purchase_Value" in portfolio_df.columns:
+            value_col = "Purchase_Value"
             chart_title = "Portfolio Allocation by Purchase Value"
         else:
             # Calculate purchase value
             portfolio_df = portfolio_df.copy()
-            portfolio_df['Purchase_Value'] = portfolio_df['Price'] * portfolio_df['Quantity']
-            value_col = 'Purchase_Value'
+            portfolio_df["Purchase_Value"] = (
+                portfolio_df["Price"] * portfolio_df["Quantity"]
+            )
+            value_col = "Purchase_Value"
             chart_title = "Portfolio Allocation by Purchase Value"
-        
+
         # Aggregate by ticker (in case of multiple entries for same ticker)
-        ticker_values = portfolio_df.groupby('Ticker')[value_col].sum().sort_values(ascending=False)
-        
+        ticker_values = (
+            portfolio_df.groupby("Ticker")[value_col].sum().sort_values(ascending=False)
+        )
+
         # Create labels with ticker and percentage
         total_value = ticker_values.sum()
         labels = []
         values = []
-        
+
         for ticker, value in ticker_values.items():
             pct = (value / total_value * 100) if total_value > 0 else 0
             labels.append(f"{ticker}<br>{pct:.1f}%")
             values.append(value)
-        
+
         # Create pie chart
-        fig = go.Figure(data=[go.Pie(
-            labels=[t.split('<br>')[0] for t in labels],  # Just ticker for labels
-            values=values,
-            hole=0.4,  # Donut chart style
-            textinfo='label+percent',
-            textposition='outside',
-            hovertemplate='<b>%{label}</b><br>' +
-                         'Value: $%{value:,.2f}<br>' +
-                         'Percentage: %{percent}<br>' +
-                         '<extra></extra>',
-            marker=dict(
-                line=dict(color='#FFFFFF', width=2)
-            )
-        )])
-        
+        fig = go.Figure(
+            data=[
+                go.Pie(
+                    labels=[
+                        t.split("<br>")[0] for t in labels
+                    ],  # Just ticker for labels
+                    values=values,
+                    hole=0.4,  # Donut chart style
+                    textinfo="label+percent",
+                    textposition="outside",
+                    hovertemplate="<b>%{label}</b><br>"
+                    + "Value: $%{value:,.2f}<br>"
+                    + "Percentage: %{percent}<br>"
+                    + "<extra></extra>",
+                    marker=dict(line=dict(color="#FFFFFF", width=2)),
+                )
+            ]
+        )
+
         fig.update_layout(
-            title=dict(
-                text=chart_title,
-                x=0.5,
-                font=dict(size=16)
-            ),
+            title=dict(text=chart_title, x=0.5, font=dict(size=16)),
             showlegend=True,
             legend=dict(
-                orientation="v",
-                yanchor="middle",
-                y=0.5,
-                xanchor="left",
-                x=1.1
+                orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.1
             ),
             margin=dict(l=20, r=20, t=50, b=20),
-            height=400
+            height=400,
         )
-        
+
         return fig
-        
+
     except Exception as e:
         # Return error chart
         fig = go.Figure()
         fig.add_annotation(
             text=f"Error creating chart: {str(e)}",
-            xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False,
-            font=dict(size=14, color="red")
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(size=14, color="red"),
         )
-        fig.update_layout(
-            title="Portfolio Allocation",
-            showlegend=False
-        )
+        fig.update_layout(title="Portfolio Allocation", showlegend=False)
         return fig
 
 
@@ -376,34 +376,34 @@ def get_extracted_directive_list() -> List[str]:
     try:
         from utils.s3_utils import list_files_in_s3
         import re
-        
+
         # Get extracted directives from S3
         extracted_files = list_files_in_s3("data/extracted_directives/default/")
-        
+
         if not extracted_files:
             print("[WARNING] No extracted directives found in S3")
             return []
-        
+
         # Extract unique directive names from filenames
         directive_names = set()
         for file_path in extracted_files:
             filename = file_path.split("/")[-1]
-            
+
             # Remove suffixes like _complete.json, _nlp_extraction.json
             directive_name = filename.replace("_complete.json", "").replace(
                 "_nlp_extraction.json", ""
             )
-            
+
             # Remove timestamp pattern YYYYMMDD_HHMMSS
             directive_name = re.sub(r"_\d{8}_\d{6}$", "", directive_name)
-            
+
             # Clean up the name for display
             if directive_name and not directive_name.startswith("."):
                 directive_names.add(directive_name)
-        
+
         # Sort alphabetically
         return sorted(list(directive_names))
-    
+
     except Exception as e:
         print(f"[ERROR] Error loading extracted directives: {e}")
         return []
@@ -989,8 +989,12 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
         df, error = load_portfolio_from_s3(filename)
 
         if df is not None and len(df) > 0:
-            status_msg = f"✅ Loaded portfolio '{filename}' with {len(df)} holdings\n\n"
-            status_msg += "📄 **SEC Filing Extraction:**\n"
+            # Log verbose status to console
+            print(f"[INFO] ✅ Loaded portfolio '{filename}' with {len(df)} holdings")
+            print(f"[INFO] 📄 SEC Filing Extraction:")
+
+            # Create clean UI status message
+            status_msg = ""
 
             # Extract portfolio name from filename (e.g., "portfolio_name.csv" -> "portfolio_name")
             portfolio_name = filename.replace(".csv", "").replace("portfolio_", "")
@@ -1021,10 +1025,7 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
 
                     if existing_10k_files:
                         # Data already exists, skip extraction
-                        print(
-                            f"[INFO] Extracted data already exists for {ticker}, skipping extraction"
-                        )
-                        status_msg += f"✓ {ticker}: Using existing extraction\n"
+                        print(f"[INFO] ✓ {ticker}: Using existing extraction")
                         skipped_count += 1
                         continue
 
@@ -1124,12 +1125,14 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                             )
 
                             if sections.get("_extraction_success"):
-                                status_msg += f"✅ {ticker}: Extracted and saved (from {filing_source})\n"
+                                print(
+                                    f"[INFO] ✅ {ticker}: Extracted and saved (from {filing_source})"
+                                )
                                 extraction_count += 1
                             else:
                                 error_msg = sections.get("_error", "Unknown error")
-                                status_msg += (
-                                    f"⚠️ {ticker}: Extraction failed - {error_msg}\n"
+                                print(
+                                    f"[INFO] ⚠️ {ticker}: Extraction failed - {error_msg}"
                                 )
 
                         except Exception as e:
@@ -1137,19 +1140,20 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                             import traceback
 
                             traceback.print_exc()
-                            status_msg += f"❌ {ticker}: {str(e)}\n"
                     else:
                         print(
                             f"[WARNING] No 10-K filing found for {ticker} (checked S3 and local)"
                         )
-                        status_msg += f"⚠️ {ticker}: No 10-K filing available\n"
+                        print(f"[INFO] ⚠️ {ticker}: No 10-K filing available")
 
                 except Exception as e:
                     print(f"[WARNING] Could not process {ticker}: {e}")
-                    status_msg += f"❌ {ticker}: {str(e)}\n"
+                    print(f"[INFO] ❌ {ticker}: {str(e)}")
 
-            status_msg += f"\n💾 Extracted data location: `extracted_filings/`\n"
-            status_msg += f"📊 Status: {extraction_count} extracted, {skipped_count} using existing data ({extraction_count + skipped_count}/{len(unique_tickers)} ready)"
+            print(f"[INFO] 💾 Extracted data location: extracted_filings/")
+            print(
+                f"[INFO] 📊 Status: {extraction_count} extracted, {skipped_count} using existing data ({extraction_count + skipped_count}/{len(unique_tickers)} ready)"
+            )
 
             # Automatically fetch prices and calculate performance
             try:
@@ -1157,10 +1161,18 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                 current_prices = fetch_portfolio_prices(unique_tickers_list)
                 result = calculate_portfolio_performance(df, current_prices)
                 df = result["df"]  # Use enhanced DataFrame with performance metrics
-                status_msg += f"- **Current Value:** {result['summary'].get('Current Value', 'Calculating...')}\n"
-                status_msg += f"- **Total Return:** {result['summary'].get('Total Return', 'N/A')}\n"
+                print(
+                    f"[INFO] Current Value: {result['summary'].get('Current Value', 'Calculating...')}"
+                )
+                print(
+                    f"[INFO] Total Return: {result['summary'].get('Total Return', 'N/A')}"
+                )
+                status_msg = f"✅ Portfolio loaded successfully with {len(df)} holdings"
             except Exception as e:
                 print(f"[WARNING] Could not fetch prices on load: {e}")
+                status_msg = (
+                    f"✅ Portfolio loaded with {len(df)} holdings (prices pending)"
+                )
                 # Continue with basic DataFrame
 
             return df, status_msg
@@ -1442,42 +1454,42 @@ def generate_portfolio_recommendations_from_filings(
 
         # Format output with enhanced display
         result = "## 📊 AI-Powered Portfolio Recommendations\n\n"
-        
+
         # Overall Strategy Section
         result += "### 🎯 Overall Strategy\n"
         result += f"{recommendations.get('overall_strategy', 'N/A')}\n\n"
-        
+
         # Risk Assessment Section
         result += "### ⚠️ Risk Assessment\n"
         result += f"{recommendations.get('risk_assessment', 'N/A')}\n\n"
-        
+
         # Portfolio Metrics (if available)
-        if recommendations.get('portfolio_metrics'):
-            metrics = recommendations['portfolio_metrics']
+        if recommendations.get("portfolio_metrics"):
+            metrics = recommendations["portfolio_metrics"]
             result += "### 📈 Portfolio Metrics\n"
             result += f"- **Current Risk Score:** {metrics.get('current_risk_score', 'N/A')}/10\n"
             result += f"- **Projected Risk Score:** {metrics.get('projected_risk_score', 'N/A')}/10 (after implementing recommendations)\n"
             result += f"- **Expected Return Improvement:** {metrics.get('expected_return_improvement', 'N/A')}\n"
             result += f"- **Diversification Score:** {metrics.get('diversification_score', 'N/A')}\n\n"
-        
+
         # Top Opportunities and Risks
-        if recommendations.get('top_opportunities'):
+        if recommendations.get("top_opportunities"):
             result += "### 💡 Top Opportunities\n"
-            for opp in recommendations['top_opportunities']:
+            for opp in recommendations["top_opportunities"]:
                 result += f"- {opp}\n"
             result += "\n"
-        
-        if recommendations.get('top_risks'):
+
+        if recommendations.get("top_risks"):
             result += "### 🚨 Top Risks to Monitor\n"
-            for risk in recommendations['top_risks']:
+            for risk in recommendations["top_risks"]:
                 result += f"- {risk}\n"
             result += "\n"
-        
+
         # Regulatory Compliance Summary
-        if recommendations.get('regulatory_compliance_summary'):
+        if recommendations.get("regulatory_compliance_summary"):
             result += "### ✅ Regulatory Compliance Summary\n"
             result += f"{recommendations['regulatory_compliance_summary']}\n\n"
-        
+
         result += "---\n\n"
 
         recs = recommendations.get("recommendations", [])
@@ -1606,19 +1618,19 @@ def generate_portfolio_recommendations_from_filings(
                 reason = rec.get("reason", "No reason provided")
                 confidence = rec.get("confidence", "medium")
                 timeframe = rec.get("timeframe", "N/A")
-                
+
                 # Display ticker with company info
                 company_info = f"{ticker}"
                 if company_name:
                     company_info += f" - {company_name}"
                 if sector:
                     company_info += f" ({sector})"
-                
+
                 result += f"### **{action}: {company_info}**\n"
                 result += f"**Priority:** {rec.get('priority', 'high').upper()} | **Confidence:** {confidence.upper()} | **Timeframe:** {timeframe}\n\n"
                 result += f"**Portfolio Weight:** {current_weight:.2f}% → **Recommended:** {normalized_rec_weight:.2f}%\n\n"
                 result += f"**Rationale:** {reason}\n\n"
-                
+
                 # Add additional details if available
                 if rec.get("key_risks"):
                     result += f"**Key Risks:** {rec['key_risks']}\n\n"
@@ -1628,7 +1640,7 @@ def generate_portfolio_recommendations_from_filings(
                     result += f"**Financial Metrics:** {rec['financial_metrics']}\n\n"
                 if rec.get("expected_impact"):
                     result += f"**Expected Impact:** {rec['expected_impact']}\n\n"
-                
+
                 result += "---\n\n"
 
         # Medium Priority
@@ -1646,7 +1658,7 @@ def generate_portfolio_recommendations_from_filings(
                 reason = rec.get("reason", "No reason provided")
                 confidence = rec.get("confidence", "medium")
                 timeframe = rec.get("timeframe", "N/A")
-                
+
                 company_info = f"{ticker}"
                 if company_name:
                     company_info += f" - {company_name}"
@@ -1657,13 +1669,13 @@ def generate_portfolio_recommendations_from_filings(
                 result += f"*Confidence: {confidence.capitalize()} | Timeframe: {timeframe}*\n\n"
                 result += f"Current: {current_weight:.2f}% → Recommended: {normalized_rec_weight:.2f}%\n\n"
                 result += f"{reason}\n\n"
-                
+
                 # Add key additional info if available
                 if rec.get("regulatory_impact"):
                     result += f"*Regulatory Impact: {rec['regulatory_impact']}*\n\n"
                 if rec.get("expected_impact"):
                     result += f"*Expected Impact: {rec['expected_impact']}*\n\n"
-                
+
                 result += "---\n\n"
 
         # Low Priority
@@ -1679,7 +1691,7 @@ def generate_portfolio_recommendations_from_filings(
                 )
                 reason = rec.get("reason", "No reason provided")
                 timeframe = rec.get("timeframe", "N/A")
-                
+
                 company_info = f"{ticker}"
                 if company_name:
                     company_info += f" - {company_name}"
@@ -1706,15 +1718,15 @@ def generate_portfolio_recommendations_from_filings(
             result += f"| {ticker} | {current_w:.2f}% | {normalized_w:.2f}% | {change:+.2f}% |\n"
 
         # Add implementation roadmap if available
-        if recommendations.get('implementation_roadmap'):
+        if recommendations.get("implementation_roadmap"):
             result += f"\n---\n\n"
             result += f"## 🗓️ Implementation Roadmap\n\n"
-            for phase in recommendations['implementation_roadmap']:
+            for phase in recommendations["implementation_roadmap"]:
                 phase_name = phase.get("phase", "Phase")
                 timeframe = phase.get("timeframe", "N/A")
                 actions = phase.get("actions", [])
                 rationale = phase.get("rationale", "")
-                
+
                 result += f"### {phase_name} ({timeframe})\n\n"
                 if rationale:
                     result += f"*{rationale}*\n\n"
@@ -1723,7 +1735,7 @@ def generate_portfolio_recommendations_from_filings(
                     for action in actions:
                         result += f"- {action}\n"
                     result += "\n"
-        
+
         # Add sector diversification suggestions if available
         if sector_diversification:
             result += f"\n---\n\n"
@@ -1731,7 +1743,7 @@ def generate_portfolio_recommendations_from_filings(
             for div_rec in sector_diversification:
                 reduce_sector = div_rec.get("reduce_sector", "Unknown Sector")
                 reduction_rationale = div_rec.get("reduction_rationale", "")
-                
+
                 result += f"### Reduce Exposure to: {reduce_sector}\n\n"
                 if reduction_rationale:
                     result += f"{reduction_rationale}\n\n"
@@ -1755,20 +1767,20 @@ def generate_portfolio_recommendations_from_filings(
                         if allocation:
                             result += f" ({allocation} allocation)"
                         result += "\n\n"
-                        
+
                         if suggested_tickers:
                             result += f"**Suggested Tickers:** {', '.join(suggested_tickers)}\n\n"
-                        
+
                         result += f"**Why This Sector:** {reasons}\n\n"
                         result += f"**Portfolio Fit:** {complement}\n\n"
-                        
+
                         if correlation:
                             result += f"**Correlation Benefits:** {correlation}\n\n"
                         if growth:
                             result += f"**Growth Outlook:** {growth}\n\n"
                         if reg_advantage:
                             result += f"**Regulatory Position:** {reg_advantage}\n\n"
-                        
+
                         result += "---\n\n"
 
         # Add cash if suggested (only when truly no better options)
@@ -1942,31 +1954,14 @@ def generate_portfolio_recommendations_from_filings(
         result += f"- Market conditions\n"
         result += f"*The recommended allocation aims to optimize risk-adjusted returns based on current regulatory and filing analysis.*\n"
 
-        result += f"\n---\n\n"
-        result += f"**📊 Analysis Summary:**\n"
-        result += f"- Analyzed {len(filings_data)} SEC 10-K filings\n"
-        result += f"- Generated {len(recs)} recommendations\n"
-        result += f"- Priority breakdown: {len(critical)} critical/high, {len(medium)} medium, {len(low)} low\n\n"
-
-        # Check API key status
-        api_key_status = (
-            "✅ Configured"
-            if (os.getenv("OPENAI_API_KEY") or os.getenv("PERPLEXITY_API_KEY"))
-            else "❌ Not configured"
-        )
-        result += f"**🔑 API Status:** {api_key_status}\n"
-        if api_key_status == "❌ Not configured":
-            result += f"\n**💡 To enable AI-powered recommendations:**\n"
-            result += f"1. Get an API key from:\n"
-            result += (
-                f"   - OpenAI: https://platform.openai.com/api-keys (recommended)\n"
-            )
-            result += f"   - Perplexity: https://www.perplexity.ai/settings/api\n"
-            result += f"2. Add to your `.env` file:\n"
-            result += f"   `OPENAI_API_KEY=sk-your-key-here`\n"
-            result += f"3. Restart the application and try again\n"
-        else:
-            result += f"\n**✅ AI recommendations are enabled and working!**\n"
+        # Add citations if Perplexity was used
+        if hasattr(llm_client, 'last_citations') and llm_client.last_citations:
+            result += f"\n---\n\n"
+            result += f"### 📚 References\n\n"
+            result += f"*This analysis used real-time internet data from the following sources:*\n\n"
+            for i, citation in enumerate(llm_client.last_citations, 1):
+                result += f"{i}. [{citation}]({citation})\n"
+            result += f"\n"
 
         return result
 
@@ -2067,8 +2062,28 @@ def run_simulation(portfolio_json: str) -> str:
         return f"Error running simulation: {str(e)}"
 
 
-# Create Gradio interface
-with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as demo:
+# Create Gradio interface with enhanced theme
+custom_css = """
+/* Import from custom CSS file */
+@import url('templates/custom.css');
+"""
+
+with gr.Blocks(
+    title="Regulatory Impact Analyzer",
+    theme=gr.themes.Soft(
+        primary_hue="indigo",
+        secondary_hue="purple",
+        neutral_hue="slate",
+        radius_size="lg",
+        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    ).set(
+        body_background_fill="*neutral_50",
+        body_background_fill_dark="*neutral_950",
+        button_primary_background_fill="linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        button_primary_background_fill_hover="linear-gradient(135deg, #5568d3 0%, #6a4291 100%)",
+    ),
+    css=custom_css,
+) as demo:
     gr.Markdown("# 📊 Regulatory Impact Analyzer")
     gr.Markdown(
         "Analyze regulatory documents and evaluate their financial impact on S&P 500 companies."
@@ -2082,7 +2097,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     gr.Markdown("### Select or Upload Document")
                     document_selector = gr.Dropdown(
                         choices=get_directive_list(),
-                        label="Available Regulatory Documents (from S3)",
+                        label="Available Regulatory Documents",
                         interactive=True,
                     )
                     document_file = gr.File(label="Or Upload New Document")
@@ -2214,81 +2229,85 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
 
         # Tab 2: Analysis
         with gr.Tab("🔍 Analysis"):
+            # Top Row: Portfolio and Info sections (side by side, collapsible)
             with gr.Row():
-                # Left Column: Portfolio Management
+                # Left Column: Portfolio Analysis
                 with gr.Column(scale=1, min_width=450):
-                    gr.Markdown(
+                    with gr.Accordion("📊 Analyze Portfolio", open=True):
+                        analysis_portfolio_dropdown = gr.Dropdown(
+                            choices=["Select a portfolio..."] + list_portfolios_in_s3(),
+                            label="Select Portfolio",
+                            value="Select a portfolio...",
+                            interactive=True,
+                        )
+                        load_analyze_portfolio_btn = gr.Button(
+                            "📊 Load & Analyze Portfolio",
+                            variant="secondary",
+                            size="lg",
+                        )
+                        load_analysis_portfolio_status = gr.Markdown()
+
+                        with gr.Group():
+                            gr.Markdown("**Portfolio Holdings**")
+                            analysis_portfolio_display = gr.Dataframe(
+                                headers=[
+                                    "Ticker",
+                                    "Price",
+                                    "Quantity",
+                                    "Date_Bought",
+                                    "Current_Price",
+                                    "Current_Value",
+                                    "Gain_Loss",
+                                    "Gain_Loss_Pct",
+                                    "Weight",
+                                ],
+                                interactive=False,
+                                wrap=True,
+                                max_height=250,
+                            )
+                            analysis_portfolio_summary = gr.Markdown(elem_classes=["analysis-output"])
+
+                # Right Column: Info Section
+                with gr.Column(scale=1, min_width=450):
+                    with gr.Accordion(
+                        "🤖 AI-Powered Portfolio Recommendations", open=True
+                    ):
+                        gr.Markdown(
+                            """
+                        Analyzes SEC 10-K filings and regulatory directives for your portfolio companies to provide:
+                        - Risk assessment based on filing data and regulatory compliance
+                        - Actionable recommendations (Buy/Sell/Hold) considering regulatory impacts
+                        - Priority ranking (Critical/Medium/Low)
+                        - Weight adjustment suggestions normalized to 100%
+                        
+                        **Note:** Recommendations consider both company SEC filings and regulatory directives from data/directives/ in S3.
                         """
-                    ### 🤖 AI-Powered Portfolio Recommendations
-                    
-                    Analyzes SEC 10-K filings and regulatory directives for your portfolio companies to provide:
-                    - Risk assessment based on filing data and regulatory compliance
-                    - Actionable recommendations (Buy/Sell/Hold) considering regulatory impacts
-                    - Priority ranking (Critical/Medium/Low)
-                    - Weight adjustment suggestions normalized to 100%
-                    
-                    **Note:** Recommendations consider both company SEC filings and regulatory directives from data/directives/ in S3.
-                    """
-                    )
+                        )
 
-                    gr.Markdown("---")
+            # Bottom Row: AI Recommendations (full width)
+            with gr.Row():
+                with gr.Column(scale=1):
+                    with gr.Accordion("🎯 AI Recommendations", open=True):
+                        # Directive selection dropdown
+                        directive_dropdown = gr.Dropdown(
+                            choices=["Select a directive..."]
+                            + get_extracted_directive_list(),
+                            label="Select Regulatory Directive",
+                            value="Select a directive...",
+                            interactive=True,
+                            info="Choose a directive to analyze regulatory impact on your portfolio",
+                        )
 
-                    # Portfolio Selection and Details (merged)
-                    gr.Markdown("### 📊 Analyze Portfolio")
-                    analysis_portfolio_dropdown = gr.Dropdown(
-                        choices=["Select a portfolio..."] + list_portfolios_in_s3(),
-                        label="Select Portfolio from S3",
-                        value="Select a portfolio...",
-                        interactive=True,
-                    )
-                    load_analyze_portfolio_btn = gr.Button(
-                        "📊 Load & Analyze Portfolio", variant="secondary", size="lg"
-                    )
-                    load_analysis_portfolio_status = gr.Markdown()
-
-                    with gr.Group():
-                        analysis_portfolio_display = gr.Dataframe(
-                            label="Portfolio Holdings",
-                            headers=[
-                                "Ticker",
-                                "Price",
-                                "Quantity",
-                                "Date_Bought",
-                                "Current_Price",
-                                "Current_Value",
-                                "Gain_Loss",
-                                "Gain_Loss_Pct",
-                                "Weight",
-                            ],
+                        filing_analysis_btn = gr.Button(
+                            "🤖 Generate AI Recommendations",
+                            variant="primary",
+                            size="lg",
                             interactive=False,
-                            wrap=True,
-                            max_height=400,
                         )
-                        analysis_portfolio_summary = gr.Markdown()
-
-                # Right Column: AI Recommendations (full height)
-                with gr.Column(scale=1, min_width=450):
-                    gr.Markdown("### 🎯 AI Recommendations")
-
-                    # Directive selection dropdown
-                    directive_dropdown = gr.Dropdown(
-                        choices=["Select a directive..."] + get_extracted_directive_list(),
-                        label="Select Regulatory Directive",
-                        value="Select a directive...",
-                        interactive=True,
-                        info="Choose a directive to analyze regulatory impact on your portfolio",
-                    )
-
-                    filing_analysis_btn = gr.Button(
-                        "🤖 Generate AI Recommendations",
-                        variant="primary",
-                        size="lg",
-                        interactive=False,
-                    )
-                    with gr.Group():
-                        filing_analysis_output = gr.Markdown(
-                            label="Recommendations", elem_classes=["scrollable-output"]
-                        )
+                        with gr.Group():
+                            filing_analysis_output = gr.Markdown(
+                                label="Recommendations", elem_classes=["scrollable-output", "analysis-output"]
+                            )
 
             # Portfolio state for analysis tab
             analysis_portfolio_df_state = gr.State(value=pd.DataFrame())
@@ -2317,9 +2336,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                         summary = result["summary"]
                         metrics = result["metrics"]
 
-                        summary_text = f"""## 📈 Portfolio Summary
-
-**Total Holdings:** {summary.get('Positions', 0)} positions
+                        summary_text = f"""**Total Holdings:** {summary.get('Positions', 0)} positions
 
 **Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
 **Current Value:** {summary.get('Current Value', 'N/A')}
@@ -2333,9 +2350,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                         total_cost = (
                             portfolio_df["Price"] * portfolio_df["Quantity"]
                         ).sum()
-                        summary_text = f"""## Portfolio Summary
-
-**Total Holdings:** {len(portfolio_df)} positions
+                        summary_text = f"""**Total Holdings:** {len(portfolio_df)} positions
 **Total Shares:** {portfolio_df['Quantity'].sum():,}
 **Total Cost:** ${total_cost:,.2f}
 
@@ -2406,7 +2421,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     with gr.Accordion("📂 Load Existing Portfolio", open=False):
                         portfolio_dropdown = gr.Dropdown(
                             choices=["Select a portfolio..."] + list_portfolios_in_s3(),
-                            label="Select Portfolio from S3",
+                            label="Select Portfolio",
                             value="Select a portfolio...",
                             interactive=True,
                         )
@@ -2441,14 +2456,14 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     add_stock_status = gr.Markdown()
 
                     # Save to S3
-                    gr.Markdown("### 💾 Save Portfolio to S3")
+                    gr.Markdown("### 💾 Save Portfolio")
                     portfolio_name_input = gr.Textbox(
                         label="Portfolio Name (optional - will auto-generate if empty or duplicate)",
                         placeholder="my_portfolio",
                         value="",
                     )
                     save_to_s3_btn = gr.Button(
-                        "💾 Save Portfolio to S3", variant="primary"
+                        "💾 Save Portfolio", variant="primary"
                     )
                     save_to_s3_status = gr.Markdown()
 
@@ -2481,35 +2496,35 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                     )
 
                     portfolio_summary = gr.Markdown()
-                    
+
                     # Pie chart visualization
                     gr.Markdown("### 📊 Portfolio Allocation")
                     portfolio_pie_chart = gr.Plot(label="Holdings Distribution")
-                    
+
                     gr.Markdown("---")
                     gr.Markdown(
                         "💡 **To analyze your portfolio**, go to the **Analysis** tab"
                     )
 
             # Helper function to update portfolio summary and chart
-            def update_portfolio_summary(portfolio_df: pd.DataFrame) -> Tuple[str, go.Figure]:
+            def update_portfolio_summary(
+                portfolio_df: pd.DataFrame,
+            ) -> Tuple[str, go.Figure]:
                 """Update portfolio summary and pie chart."""
                 summary_text = "Portfolio is empty."
                 chart = create_portfolio_pie_chart(pd.DataFrame())
-                
+
                 if portfolio_df is None or len(portfolio_df) == 0:
                     return summary_text, chart
-                
+
                 try:
                     # Check if enhanced columns exist
-                    if 'Current_Price' in portfolio_df.columns:
+                    if "Current_Price" in portfolio_df.columns:
                         result = calculate_portfolio_performance(portfolio_df)
-                        summary = result['summary']
-                        metrics = result['metrics']
-                        
-                        summary_text = f"""## 📈 Portfolio Summary
+                        summary = result["summary"]
+                        metrics = result["metrics"]
 
-**Total Holdings:** {summary.get('Positions', 0)} positions
+                        summary_text = f"""**Total Holdings:** {summary.get('Positions', 0)} positions
 
 **Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
 **Current Value:** {summary.get('Current Value', 'N/A')}
@@ -2524,7 +2539,9 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
 💡 **Note:** AI recommendations consider both SEC 10-K filings and regulatory directives from `data/directives/` in S3."""
                     else:
                         # Basic summary without prices
-                        total_cost = (portfolio_df['Price'] * portfolio_df['Quantity']).sum()
+                        total_cost = (
+                            portfolio_df["Price"] * portfolio_df["Quantity"]
+                        ).sum()
                         summary_text = f"""## Portfolio Summary
 
 **Total Holdings:** {len(portfolio_df)} positions
@@ -2532,16 +2549,16 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
 **Total Cost:** ${total_cost:,.2f}
 
 💡 Click "🔄 Refresh Prices" to see current values and performance metrics."""
-                    
+
                     # Update chart
                     chart = create_portfolio_pie_chart(portfolio_df)
-                    
+
                 except Exception as e:
                     summary_text = f"Error calculating summary: {str(e)}"
                     chart = create_portfolio_pie_chart(pd.DataFrame())
-                
+
                 return summary_text, chart
-            
+
             # Original helper function for analysis tab (without chart)
             def update_portfolio_summary_text_only(portfolio_df: pd.DataFrame) -> str:
                 """Update portfolio summary with performance metrics."""
@@ -2555,9 +2572,7 @@ with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as de
                         summary = result["summary"]
                         metrics = result["metrics"]
 
-                        summary_text = f"""## 📈 Portfolio Summary
-
-**Total Holdings:** {summary.get('Positions', 0)} positions
+                        summary_text = f"""**Total Holdings:** {summary.get('Positions', 0)} positions
 
 **Cost Basis:** {summary.get('Total Cost Basis', 'N/A')}
 **Current Value:** {summary.get('Current Value', 'N/A')}

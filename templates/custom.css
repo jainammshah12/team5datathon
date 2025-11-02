@@ -1,115 +1,268 @@
-/* Custom CSS for Gradio Application */
+/* Enhanced CSS with Pico.css framework */
 
-/* Main container styling */
-.main-container {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 20px;
+/* Import Pico.css for beautiful default styling */
+@import url('https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css');
+
+/* Root variables for theme consistency */
+:root {
+    --primary: #667eea;
+    --primary-hover: #5568d3;
+    --primary-focus: rgba(102, 126, 234, 0.125);
+    --gradient-start: #667eea;
+    --gradient-end: #764ba2;
 }
 
-/* Header styling */
-.header {
-    background: white;
-    border-radius: 10px;
-    padding: 20px;
+/* Override Pico defaults with custom theme */
+[data-theme="light"],
+:root:not([data-theme="dark"]) {
+    --pico-primary: var(--primary);
+    --pico-primary-hover: var(--primary-hover);
+    --pico-primary-focus: var(--primary-focus);
+}
+
+[data-theme="dark"] {
+    --pico-primary: #8b9eff;
+    --pico-primary-hover: #9faeff;
+    --pico-primary-focus: rgba(139, 158, 255, 0.175);
+}
+
+/* Gradio-specific enhancements */
+.gradio-container {
+    max-width: 1400px !important;
+    margin: 0 auto !important;
+}
+
+/* Row spacing */
+.gr-row {
     margin-bottom: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
-.header h1 {
-    color: #333;
-    margin: 0;
-    font-size: 2em;
+.gr-column {
+    padding: 10px;
 }
 
-.header p {
-    color: #666;
-    margin: 10px 0 0 0;
+/* Enhance buttons */
+.gr-button {
+    transition: all 0.2s ease;
 }
 
-/* Card styling for sections */
-.card {
-    background: white;
+.gr-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.gr-button-primary {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%) !important;
+    border: none !important;
+}
+
+.gr-button-primary:hover {
+    opacity: 0.9;
+}
+
+/* Enhance input fields */
+.gr-input,
+.gr-dropdown,
+.gr-textbox {
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gr-input:focus,
+.gr-dropdown:focus,
+.gr-textbox:focus {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px var(--primary-focus) !important;
+}
+
+/* Enhance tabs */
+.gr-tab {
+    transition: all 0.2s ease;
     border-radius: 8px;
-    padding: 20px;
-    margin: 10px 0;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-/* Button styling */
-button {
-    background: #667eea;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    padding: 10px 20px;
-    cursor: pointer;
-    transition: background 0.3s;
+.gr-tab:hover {
+    background-color: var(--primary-focus);
 }
 
-button:hover {
-    background: #764ba2;
+.gr-tab-selected {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%) !important;
+    color: white !important;
 }
 
-/* Input field styling */
-input[type="text"],
-input[type="file"],
-select {
-    border: 2px solid #ddd;
-    border-radius: 5px;
-    padding: 8px;
-    font-size: 14px;
-    width: 100%;
+/* Enhance cards/panels */
+.gr-panel,
+.gr-box {
+    border-radius: 12px;
+    transition: box-shadow 0.2s ease;
 }
 
-input[type="text"]:focus,
-select:focus {
-    border-color: #667eea;
-    outline: none;
+.gr-panel:hover {
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
 }
 
-/* Output area styling */
-.output-area {
-    background: #f8f9fa;
-    border-radius: 5px;
-    padding: 15px;
-    margin-top: 10px;
-    max-height: 500px;
-    overflow-y: auto;
-    border: 1px solid #ddd;
+/* Group containers - add padding for content */
+.gr-group {
+    padding: 16px;
 }
 
 /* Status indicators */
 .status-success {
     color: #28a745;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .status-error {
     color: #dc3545;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .status-warning {
     color: #ffc107;
-    font-weight: bold;
+    font-weight: 600;
 }
 
-/* Company/stock list styling */
+/* Enhanced dataframe tables */
+.gr-dataframe table {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.gr-dataframe thead th {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+    color: white;
+    font-weight: 600;
+}
+
+.gr-dataframe tbody tr:hover {
+    background-color: var(--primary-focus);
+}
+
+/* Dataframe container styling */
+.gr-dataframe {
+    margin-top: 8px;
+}
+
+/* Bold headings above dataframes */
+.gr-group .gr-markdown strong {
+    font-size: 0.95rem;
+    color: var(--pico-color);
+    display: block;
+    margin-bottom: 8px;
+}
+
+/* Analysis output areas - add spacing around dynamic content */
+.scrollable-output,
+.analysis-output {
+    margin-top: 16px;
+}
+
+.scrollable-output .gr-markdown,
+.analysis-output .gr-markdown {
+    padding: 20px;
+    background: var(--pico-card-background-color);
+    border-radius: 8px;
+    border: 1px solid var(--pico-border-color);
+}
+
+/* Portfolio summary area in Analysis tab */
+.gr-group .gr-markdown:not(strong) {
+    padding: 16px;
+}
+
+/* Loading states */
+.gr-loading {
+    border-radius: 8px;
+}
+
+/* Markdown content */
+.gr-markdown {
+    line-height: 1.6;
+    padding-left: 12px;
+    padding-right: 12px;
+}
+
+.gr-markdown h1,
+.gr-markdown h2,
+.gr-markdown h3 {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* File upload area */
+.gr-file {
+    border: 2px dashed var(--primary);
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+
+.gr-file:hover {
+    border-color: var(--primary-hover);
+    background-color: var(--primary-focus);
+}
+
+/* Accordion styling */
+.gr-accordion {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--pico-border-color);
+    transition: all 0.3s ease;
+}
+
+.gr-accordion:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.gr-accordion-header {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+    color: white !important;
+    font-weight: 600;
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.gr-accordion-header:hover {
+    opacity: 0.95;
+}
+
+.gr-accordion-content {
+    padding: 20px;
+    background: var(--pico-card-background-color);
+}
+
+/* Slider enhancements */
+.gr-slider input[type="range"]::-webkit-slider-thumb {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+}
+
+.gr-slider input[type="range"]::-moz-range-thumb {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+}
+
+/* Stock/Company list styling */
 .stock-list {
     list-style: none;
     padding: 0;
+    margin: 0;
 }
 
 .stock-item {
-    padding: 10px;
-    margin: 5px 0;
-    background: #f8f9fa;
-    border-left: 4px solid #667eea;
-    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    border-left: 4px solid var(--primary);
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    background: var(--pico-card-background-color);
 }
 
-/* Impact indicator */
+.stock-item:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Impact indicators */
 .impact-high {
     border-left-color: #dc3545;
 }
@@ -122,14 +275,44 @@ select:focus {
     border-left-color: #28a745;
 }
 
-/* Responsive design */
+/* Responsive design enhancements */
 @media (max-width: 768px) {
-    .main-container {
-        padding: 10px;
+    .gradio-container {
+        padding: 1rem;
     }
     
-    .header h1 {
-        font-size: 1.5em;
+    .gr-markdown h1 {
+        font-size: 1.5rem;
     }
+    
+    .gr-button {
+        width: 100%;
+    }
+}
+
+/* Smooth animations */
+* {
+    transition-property: background-color, border-color, color, box-shadow, transform;
+    transition-duration: 0.2s;
+    transition-timing-function: ease;
+}
+
+/* Custom scrollbar for better aesthetics */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--pico-background-color);
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    opacity: 0.8;
 }
 
