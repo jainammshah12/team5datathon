@@ -35,6 +35,7 @@ class LLMClient:
         )
         self.model = model
         self.system_prompt = INSTRUCTIONS.get("system_prompt", "")
+        self.last_citations = []  # Store citations from Perplexity API
 
     def extract_entities(self, document_text: str) -> Dict:
         """
@@ -640,6 +641,7 @@ Consider:
                 # Note: Standard OpenAI models don't have internet access
                 # For internet access, consider using Perplexity API instead
                 print("[INFO] Using OpenAI API (no internet access)")
+                self.last_citations = []  # Clear citations (OpenAI doesn't provide them)
                 response = client.chat.completions.create(
                     model=self.model or "gpt-4o-mini",
                     messages=[
@@ -739,10 +741,11 @@ Consider:
 
             result = response.json()
             
-            # Log if citations are available (Perplexity sometimes includes them)
-            if result.get("citations"):
-                print(f"[INFO] Perplexity used {len(result['citations'])} internet sources")
-                for i, citation in enumerate(result.get("citations", [])[:3], 1):
+            # Store and log citations if available (Perplexity sometimes includes them)
+            self.last_citations = result.get("citations", [])
+            if self.last_citations:
+                print(f"[INFO] Perplexity used {len(self.last_citations)} internet sources")
+                for i, citation in enumerate(self.last_citations[:3], 1):
                     print(f"  [{i}] {citation}")
             else:
                 print(f"[INFO] Perplexity response generated (internet search enabled)")

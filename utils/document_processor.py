@@ -51,11 +51,11 @@ def extract_metadata(filename: str) -> Dict[str, Optional[str]]:
     """Extract metadata from filename."""
     metadata = {"filename": filename, "type": None, "date": None, "ticker": None}
 
-    # Extract ticker from filings path (e.g., "extracted_filings/AAPL/2024-11-01-10k-AAPL.html")
-    if "fillings" in filename:
+    # Extract ticker from filings path (e.g., "data/filings/AAPL/2024-11-01-10k-AAPL.html")
+    if "filings" in filename:
         parts = filename.split("/")
         if len(parts) >= 2:
-            metadata["ticker"] = parts[-2] if parts[-2] != "fillings" else None
+            metadata["ticker"] = parts[-2] if parts[-2] != "filings" else None
 
     # Extract date pattern (YYYY-MM-DD)
     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", filename)
