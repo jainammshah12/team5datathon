@@ -74,7 +74,7 @@ def load_sp500_data() -> pd.DataFrame:
                 {
                     "Error": [f"⚠️ Failed to load S&P 500 data: {str(e)}"],
                     "Solution": [
-                        "Please check AWS credentials in .env file or ensure local data/ folder exists"
+                        "Please check AWS credentials in .env file and ensure data exists in S3"
                     ],
                 }
             )
@@ -93,7 +93,7 @@ def load_stock_performance() -> pd.DataFrame:
                 {
                     "Error": [f"⚠️ Failed to load stock performance data: {str(e)}"],
                     "Solution": [
-                        "Please check AWS credentials in .env file or ensure local data/ folder exists"
+                        "Please check AWS credentials in .env file and ensure data exists in S3"
                     ],
                 }
             )
@@ -1634,55 +1634,10 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                             print(f"[INFO] No 10-K filing found in S3 for {ticker}")
                     else:
                         print(
-                            f"[INFO] No filings in S3 for {ticker}, checking local files..."
+                            f"[INFO] No filings in S3 for {ticker}"
                         )
 
-                    # Fallback: Check for local raw filing files if not found in S3
-                    if not html_content:
-                        import glob
-                        import os
-
-                        local_filing_dir = f"data/filings/{ticker}"
-                        if os.path.exists(local_filing_dir):
-                            # Look for 10-K HTML files locally
-                            local_10k_files = (
-                                glob.glob(f"{local_filing_dir}/*10k*.html")
-                                + glob.glob(f"{local_filing_dir}/*10K*.html")
-                                + glob.glob(f"{local_filing_dir}/*10-k*.html")
-                                + glob.glob(f"{local_filing_dir}/*10-K*.html")
-                            )
-
-                            if local_10k_files:
-                                local_filing_path = local_10k_files[0]
-                                print(
-                                    f"[INFO] Found local 10-K filing: {local_filing_path}"
-                                )
-
-                                try:
-                                    with open(
-                                        local_filing_path,
-                                        "r",
-                                        encoding="utf-8",
-                                        errors="ignore",
-                                    ) as f:
-                                        html_content = f.read()
-                                    filing_source = "local"
-                                    print(
-                                        f"[INFO] Successfully read local filing: {len(html_content)} chars"
-                                    )
-                                except Exception as e:
-                                    print(f"[WARNING] Could not read local filing: {e}")
-                                    html_content = None
-                            else:
-                                print(
-                                    f"[INFO] No 10-K files found locally for {ticker}"
-                                )
-                        else:
-                            print(
-                                f"[INFO] Local filing directory does not exist: {local_filing_dir}"
-                            )
-
-                    # Proceed with extraction if we have HTML content from either source
+                    # Proceed with extraction if we have HTML content from S3
                     if html_content:
                         try:
                             print(
@@ -1716,9 +1671,9 @@ def load_portfolio_from_s3_handler(filename: str) -> Tuple[pd.DataFrame, str]:
                             traceback.print_exc()
                     else:
                         print(
-                            f"[WARNING] No 10-K filing found for {ticker} (checked S3 and local)"
+                            f"[WARNING] No 10-K filing found for {ticker} in S3"
                         )
-                        print(f"[INFO] ⚠️ {ticker}: No 10-K filing available")
+                        print(f"[INFO] ⚠️ {ticker}: No 10-K filing available in S3")
 
                 except Exception as e:
                     print(f"[WARNING] Could not process {ticker}: {e}")
@@ -3246,38 +3201,24 @@ with gr.Blocks(
 
         # Tab 4: Data Explorer
         with gr.Tab("📊 Data Explorer"):
-            gr.Markdown(
-                """
-                ## 📊 SEC Filing Data Explorer
-                
-                Track S&P 500 companies and their SEC filing status:
-                - **Last Filing Dates**: When companies last filed 10-K (annual) or 10-Q (quarterly) reports
-                - **Expected Next Filings**: Calculated based on SEC filing deadlines
-                - **Extraction Status**: Whether filing data has been extracted and is available for AI analysis
-                - **Company Metadata**: Sector, industry, and company information
-                
-                **Use Cases:**
-                - 📅 Track upcoming filing deadlines
-                - 🔍 Identify companies with extracted filing data ready for analysis
-                - 📊 Filter by sector to analyze industry trends
-                - ✅ Monitor which companies are up-to-date with SEC requirements
-                """
-            )
-            
             with gr.Row():
-                with gr.Column(scale=2):
-                    gr.Markdown("### 📈 S&P 500 Company Filing Status")
-                    with gr.Row():
-                        refresh_filing_status_btn = gr.Button(
-                            "🔄 Refresh Filing Status", variant="primary", size="lg"
-                        )
-                        gr.Markdown("*This may take a few minutes to load company data*")
-                    
-                    filing_status_display = gr.Dataframe(
-                        label="Filing Status Dashboard",
-                        interactive=False,
-                        wrap=True,
-                        column_widths=["8%", "15%", "12%", "15%", "12%", "10%", "10%", "12%", "6%"]
+                with gr.Column(scale=1):
+                    gr.Markdown(
+                        """
+                        ## 📊 SEC Filing Data Explorer
+                        
+                        Track S&P 500 companies and their SEC filing status:
+                        - **Last Filing Dates**: When companies last filed 10-K (annual) or 10-Q (quarterly) reports
+                        - **Expected Next Filings**: Calculated based on SEC filing deadlines
+                        - **Extraction Status**: Whether filing data has been extracted and is available for AI analysis
+                        - **Company Metadata**: Sector, industry, and company information
+                        
+                        **Use Cases:**
+                        - 📅 Track upcoming filing deadlines
+                        - 🔍 Identify companies with extracted filing data ready for analysis
+                        - 📊 Filter by sector to analyze industry trends
+                        - ✅ Monitor which companies are up-to-date with SEC requirements
+                        """
                     )
                 
                 with gr.Column(scale=1):
@@ -3312,6 +3253,22 @@ with gr.Blocks(
                     gr.Markdown("### 📋 Quick Statistics")
                     filing_stats = gr.Markdown()
             
+            gr.Markdown("<br>", elem_classes="spacer")
+            gr.Markdown("### 📈 S&P 500 Company Filing Status")
+            with gr.Row():
+                refresh_filing_status_btn = gr.Button(
+                    "🔄 Refresh Filing Status", variant="primary", size="lg"
+                )
+                gr.Markdown("*This may take a few minutes to load company data*")
+            
+            filing_status_display = gr.Dataframe(
+                label="Filing Status Dashboard",
+                interactive=False,
+                wrap=True,
+                column_widths=["8%", "15%", "12%", "15%", "12%", "10%", "10%", "12%", "6%"]
+            )
+            
+            gr.Markdown("<br>", elem_classes="spacer")
             gr.Markdown("---")
             gr.Markdown("### 📊 Full S&P 500 Company List")
             sp500_display = gr.Dataframe(

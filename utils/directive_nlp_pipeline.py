@@ -3,8 +3,8 @@ Lazy-Processing Two-Layer NLP Pipeline for Regulatory Directives
 
 This module implements an intelligent NLP pipeline that:
 1. Checks if extraction already exists in S3 before processing
-2. Layer 1: AWS Comprehend (or spaCy fallback) for entity/key phrase extraction
-3. Layer 2: AWS Bedrock (Claude/Titan) for impact summarization
+2. Layer 1: spaCy for entity/key phrase extraction
+3. Layer 2: OpenAI/Perplexity for impact summarization
 
 The pipeline avoids redundant processing by reusing cached results.
 """
@@ -45,50 +45,16 @@ except ImportError:
     ANALYZER_AVAILABLE = False
     print("[WARNING] Directive analyzer not available")
 
-# AWS Comprehend client
-try:
-    import boto3
+# AWS services removed - using only spaCy and OpenAI/Perplexity
 
-    aws_region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-    aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-    aws_session_token = os.getenv("AWS_SESSION_TOKEN")
-
-    client_config = {"service_name": "comprehend", "region_name": aws_region}
-    if aws_access_key and aws_secret_key:
-        client_config["aws_access_key_id"] = aws_access_key
-        client_config["aws_secret_access_key"] = aws_secret_key
-    if aws_session_token:
-        client_config["aws_session_token"] = aws_session_token
-
-    comprehend_client = boto3.client(**client_config)
-
-    # Bedrock Runtime client (for Claude/Titan inference)
-    bedrock_config = {"service_name": "bedrock-runtime", "region_name": aws_region}
-    if aws_access_key and aws_secret_key:
-        bedrock_config["aws_access_key_id"] = aws_access_key
-        bedrock_config["aws_secret_access_key"] = aws_secret_key
-    if aws_session_token:
-        bedrock_config["aws_session_token"] = aws_session_token
-
-    bedrock_client = boto3.client(**bedrock_config)
-
-    AWS_NLP_AVAILABLE = True
-    print("[INFO] AWS Comprehend and Bedrock clients initialized")
-except Exception as e:
-    comprehend_client = None
-    bedrock_client = None
-    AWS_NLP_AVAILABLE = False
-    print(f"[WARNING] AWS NLP services not available: {e}")
-
-# spaCy fallback
+# spaCy for entity extraction
 try:
     import spacy
 
     try:
         nlp_spacy = spacy.load("en_core_web_sm")
         SPACY_AVAILABLE = True
-        print("[INFO] spaCy loaded successfully (fallback available)")
+        print("[INFO] spaCy loaded successfully for entity extraction")
     except OSError:
         SPACY_AVAILABLE = False
         print(
@@ -96,7 +62,7 @@ try:
         )
 except ImportError:
     SPACY_AVAILABLE = False
-    print("[INFO] spaCy not installed (will use AWS Comprehend only)")
+    print("[INFO] spaCy not installed - entity extraction will be limited")
 
 
 class DirectiveNLPPipeline:
@@ -170,79 +136,10 @@ class DirectiveNLPPipeline:
             print(f"[WARNING] Error checking for existing extraction: {e}")
             return None
 
-    def extract_entities_layer1_aws(self, text: str, language_code: str = "en") -> Dict:
-        """
-        Layer 1: Extract entities and key phrases using AWS Comprehend.
-
-        Args:
-            text: Directive text content
-            language_code: Language code (en, es, fr, de, it, pt, etc.)
-
-        Returns:
-            Dictionary with entities and key phrases
-        """
-        if not AWS_NLP_AVAILABLE or not comprehend_client:
-            raise RuntimeError("AWS Comprehend not available")
-
-        # AWS Comprehend has a 5000 byte limit per request
-        # Split text into chunks if needed
-        max_bytes = 4500  # Leave some margin
-        text_bytes = text.encode("utf-8")
-
-        if len(text_bytes) > max_bytes:
-            # Use first chunk for entity extraction
-            text_chunk = text_bytes[:max_bytes].decode("utf-8", errors="ignore")
-            print(
-                f"[INFO] Text truncated to {len(text_chunk)} characters for AWS Comprehend"
-            )
-        else:
-            text_chunk = text
-
-        result = {
-            "entities": [],
-            "key_phrases": [],
-            "sentiment": {},
-            "syntax_tokens": [],
-        }
-
-        try:
-            # Detect entities
-            entities_response = comprehend_client.detect_entities(
-                Text=text_chunk, LanguageCode=language_code
-            )
-            result["entities"] = entities_response.get("Entities", [])
-            print(f"[INFO] AWS Comprehend detected {len(result['entities'])} entities")
-
-            # Detect key phrases
-            key_phrases_response = comprehend_client.detect_key_phrases(
-                Text=text_chunk, LanguageCode=language_code
-            )
-            result["key_phrases"] = key_phrases_response.get("KeyPhrases", [])
-            print(
-                f"[INFO] AWS Comprehend detected {len(result['key_phrases'])} key phrases"
-            )
-
-            # Detect sentiment
-            sentiment_response = comprehend_client.detect_sentiment(
-                Text=text_chunk, LanguageCode=language_code
-            )
-            result["sentiment"] = {
-                "sentiment": sentiment_response.get("Sentiment"),
-                "scores": sentiment_response.get("SentimentScore", {}),
-            }
-            print(
-                f"[INFO] AWS Comprehend sentiment: {result['sentiment']['sentiment']}"
-            )
-
-        except Exception as e:
-            print(f"[ERROR] AWS Comprehend extraction failed: {e}")
-            raise
-
-        return result
 
     def extract_entities_layer1_spacy(self, text: str) -> Dict:
         """
-        Layer 1: Extract entities and key phrases using spaCy (fallback).
+        Layer 1: Extract entities and key phrases using spaCy.
 
         Args:
             text: Directive text content
@@ -251,7 +148,7 @@ class DirectiveNLPPipeline:
             Dictionary with entities and key phrases
         """
         if not SPACY_AVAILABLE or not nlp_spacy:
-            raise RuntimeError("spaCy not available")
+            raise RuntimeError("spaCy not available. Install with: pip install spacy && python -m spacy download en_core_web_sm")
 
         # Process with spaCy (limit to 1M characters)
         text_sample = text[:1000000] if len(text) > 1000000 else text
@@ -295,216 +192,28 @@ class DirectiveNLPPipeline:
 
     def extract_entities_layer1(self, text: str, language_code: str = "en") -> Dict:
         """
-        Layer 1: Extract entities and key phrases (auto-select AWS or spaCy).
+        Layer 1: Extract entities and key phrases using spaCy.
 
         Args:
             text: Directive text content
-            language_code: Language code
+            language_code: Language code (not used with spaCy)
 
         Returns:
             Dictionary with entities and key phrases
         """
-        # Try AWS Comprehend first
-        if AWS_NLP_AVAILABLE:
-            try:
-                return self.extract_entities_layer1_aws(text, language_code)
-            except Exception as e:
-                print(f"[WARNING] AWS Comprehend failed, trying spaCy fallback: {e}")
-
-        # Fallback to spaCy
         if SPACY_AVAILABLE:
-            try:
-                return self.extract_entities_layer1_spacy(text)
-            except Exception as e:
-                print(f"[ERROR] spaCy fallback also failed: {e}")
-                raise
-
-        raise RuntimeError(
-            "No NLP service available (AWS Comprehend and spaCy both unavailable)"
-        )
-
-    def summarize_impact_layer2_bedrock(
-        self, text: str, layer1_results: Dict, directive_metadata: Dict
-    ) -> Dict:
-        """
-        Layer 2: Summarize regulatory impact using AWS Bedrock (Claude or Titan).
-
-        Args:
-            text: Directive text content
-            layer1_results: Results from Layer 1 entity extraction
-            directive_metadata: Metadata about the directive
-
-        Returns:
-            Dictionary with impact summary and analysis
-        """
-        if not AWS_NLP_AVAILABLE or not bedrock_client:
-            raise RuntimeError("AWS Bedrock not available")
-
-        # Prepare prompt for Bedrock
-        entities_summary = ", ".join(
-            [e["Text"] for e in layer1_results["entities"][:20]]
-        )
-        key_phrases_summary = ", ".join(
-            [kp["Text"] for kp in layer1_results["key_phrases"][:20]]
-        )
-
-        prompt = f"""Analyze this regulatory directive and summarize its potential impact on financial markets and S&P 500 companies.
-
-Directive Information:
-Title: {directive_metadata.get('title', 'Unknown')}
-Language: {directive_metadata.get('language', 'Unknown')}
-
-Key Entities Detected: {entities_summary}
-
-Key Phrases: {key_phrases_summary}
-
-Text Sample (first 3000 chars):
-{text[:3000]}
-
-Provide a structured analysis covering:
-1. Affected Industries/Sectors
-2. Financial Impact Assessment (costs, penalties, compliance requirements)
-3. Timeline and Implementation Deadlines
-4. Risk Factors for Companies
-5. Geographic Scope
-6. Overall Market Impact Rating (Low/Medium/High)
-
-Format as JSON with the following structure:
-{{
-  "affected_sectors": ["sector1", "sector2"],
-  "financial_impact": {{
-    "estimated_compliance_cost": "description",
-    "penalties_range": "description",
-    "revenue_impact": "description"
-  }},
-  "timeline": {{
-    "effective_date": "date or description",
-    "key_deadlines": ["deadline1", "deadline2"]
-  }},
-  "risk_factors": ["risk1", "risk2"],
-  "geographic_scope": ["region1", "region2"],
-  "market_impact_rating": "Low/Medium/High",
-  "executive_summary": "2-3 sentence summary"
-}}
-"""
-
-        try:
-            # Use Claude 3 Haiku (cost-effective) or Claude 3 Sonnet (higher quality)
-            model_id = "anthropic.claude-3-haiku-20240307-v1:0"
-
-            request_body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 2000,
-                "temperature": 0.3,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-
-            response = bedrock_client.invoke_model(
-                modelId=model_id, body=json.dumps(request_body)
+            return self.extract_entities_layer1_spacy(text)
+        else:
+            raise RuntimeError(
+                "spaCy not available. Install with: pip install spacy && python -m spacy download en_core_web_sm"
             )
 
-            response_body = json.loads(response["body"].read())
-            content = response_body["content"][0]["text"]
-
-            print(f"[INFO] AWS Bedrock (Claude) generated impact summary")
-
-            # Parse JSON from response
-            try:
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    impact_summary = json.loads(json_match.group())
-                else:
-                    # If no JSON found, create structured response from text
-                    impact_summary = {
-                        "affected_sectors": [],
-                        "financial_impact": {},
-                        "timeline": {},
-                        "risk_factors": [],
-                        "geographic_scope": [],
-                        "market_impact_rating": "Medium",
-                        "executive_summary": content[:500],
-                    }
-            except json.JSONDecodeError:
-                impact_summary = {
-                    "affected_sectors": [],
-                    "financial_impact": {},
-                    "timeline": {},
-                    "risk_factors": [],
-                    "geographic_scope": [],
-                    "market_impact_rating": "Medium",
-                    "executive_summary": content[:500],
-                    "raw_response": content,
-                }
-
-            return impact_summary
-
-        except Exception as e:
-            print(f"[ERROR] AWS Bedrock Claude invocation failed: {e}")
-            # Try fallback to Titan
-            try:
-                return self._summarize_with_titan_fallback(
-                    text, layer1_results, directive_metadata
-                )
-            except Exception as titan_error:
-                print(f"[ERROR] Titan fallback also failed: {titan_error}")
-                raise
-
-    def _summarize_with_titan_fallback(
-        self, text: str, layer1_results: Dict, directive_metadata: Dict
-    ) -> Dict:
-        """
-        Fallback to AWS Titan for impact summarization.
-        """
-        entities_summary = ", ".join(
-            [e["Text"] for e in layer1_results["entities"][:20]]
-        )
-
-        prompt = f"""Analyze regulatory directive impact on financial markets.
-
-Title: {directive_metadata.get('title', 'Unknown')}
-Key Entities: {entities_summary}
-
-Text: {text[:2000]}
-
-Summarize: affected sectors, financial impact, timeline, risks, geographic scope, market impact rating.
-"""
-
-        model_id = "amazon.titan-text-express-v1"
-
-        request_body = {
-            "inputText": prompt,
-            "textGenerationConfig": {
-                "maxTokenCount": 1500,
-                "temperature": 0.3,
-                "topP": 0.9,
-            },
-        }
-
-        response = bedrock_client.invoke_model(
-            modelId=model_id, body=json.dumps(request_body)
-        )
-
-        response_body = json.loads(response["body"].read())
-        content = response_body["results"][0]["outputText"]
-
-        print(f"[INFO] AWS Bedrock (Titan) generated impact summary")
-
-        return {
-            "affected_sectors": [],
-            "financial_impact": {},
-            "timeline": {},
-            "risk_factors": [],
-            "geographic_scope": [],
-            "market_impact_rating": "Medium",
-            "executive_summary": content[:500],
-            "raw_response": content,
-        }
 
     def summarize_impact_layer2_openai(
         self, text: str, layer1_results: Dict, directive_metadata: Dict
     ) -> Dict:
         """
-        Layer 2: Summarize regulatory impact using OpenAI (fallback).
+        Layer 2: Summarize regulatory impact using OpenAI/Perplexity.
 
         Args:
             text: Directive text content
@@ -517,10 +226,10 @@ Summarize: affected sectors, financial impact, timeline, risks, geographic scope
         try:
             import openai
 
-            api_key = os.getenv("OPENAI_API_KEY")
+            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("PERPLEXITY_API_KEY")
 
             if not api_key:
-                raise RuntimeError("OpenAI API key not configured")
+                raise RuntimeError("OpenAI or Perplexity API key not configured")
 
             client = openai.OpenAI(api_key=api_key)
 
@@ -575,7 +284,7 @@ Provide JSON output with: affected_sectors, financial_impact, timeline, risk_fac
         self, text: str, layer1_results: Dict, directive_metadata: Dict
     ) -> Dict:
         """
-        Layer 2: Summarize regulatory impact (auto-select AWS Bedrock or OpenAI).
+        Layer 2: Summarize regulatory impact using OpenAI/Perplexity.
 
         Args:
             text: Directive text content
@@ -585,22 +294,12 @@ Provide JSON output with: affected_sectors, financial_impact, timeline, risk_fac
         Returns:
             Dictionary with impact summary
         """
-        # Try AWS Bedrock first
-        if AWS_NLP_AVAILABLE and bedrock_client:
-            try:
-                return self.summarize_impact_layer2_bedrock(
-                    text, layer1_results, directive_metadata
-                )
-            except Exception as e:
-                print(f"[WARNING] AWS Bedrock failed, trying OpenAI fallback: {e}")
-
-        # Fallback to OpenAI
         try:
             return self.summarize_impact_layer2_openai(
                 text, layer1_results, directive_metadata
             )
         except Exception as e:
-            print(f"[ERROR] OpenAI fallback also failed: {e}")
+            print(f"[ERROR] Impact summarization failed: {e}")
             # Return minimal structure
             return {
                 "affected_sectors": [],
@@ -609,7 +308,7 @@ Provide JSON output with: affected_sectors, financial_impact, timeline, risk_fac
                 "risk_factors": [],
                 "geographic_scope": [],
                 "market_impact_rating": "Unknown",
-                "executive_summary": "Impact analysis unavailable - no NLP service configured",
+                "executive_summary": "Impact analysis unavailable - OpenAI/Perplexity API key required",
                 "error": str(e),
             }
 
@@ -698,12 +397,8 @@ Provide JSON output with: affected_sectors, financial_impact, timeline, risk_fac
                 "text_length": len(text),
                 "pipeline_version": "2.0",
                 "nlp_services_used": {
-                    "layer1": "AWS Comprehend" if AWS_NLP_AVAILABLE else "spaCy",
-                    "layer2": (
-                        "AWS Bedrock Claude"
-                        if (AWS_NLP_AVAILABLE and bedrock_client)
-                        else "OpenAI"
-                    ),
+                    "layer1": "spaCy",
+                    "layer2": "OpenAI/Perplexity",
                 },
             },
             "layer1_extraction": {

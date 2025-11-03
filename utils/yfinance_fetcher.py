@@ -206,18 +206,19 @@ def create_daily_performance_dataset(
 
 def get_sp500_tickers() -> List[str]:
     """
-    Get list of S&P 500 tickers from local CSV file.
+    Get list of S&P 500 tickers from S3.
 
     Returns:
         List of ticker symbols
     """
     try:
-        df = pd.read_csv("2025-08-15_composition_sp500.csv")
+        from .s3_utils import get_sp500_companies
+        df = get_sp500_companies()
         # Extract ticker from Symbol column
         tickers = df["Symbol"].tolist()
         return [ticker.strip() for ticker in tickers if pd.notna(ticker)]
     except Exception as e:
-        print(f"Error reading S&P 500 tickers: {e}")
+        print(f"Error reading S&P 500 tickers from S3: {e}")
         return []
 
 
