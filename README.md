@@ -1,4 +1,4 @@
-# Regulatory Impact Analyzer
+# ComplianceVision
 
 AI-powered tool that analyzes regulatory documents and evaluates their financial impact on S&P 500 companies.
 

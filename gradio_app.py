@@ -1,4 +1,4 @@
-"""Main Gradio application for Regulatory Impact Analyzer."""
+"""Main Gradio application for ComplianceVision."""
 
 import gradio as gr
 import pandas as pd
@@ -2068,8 +2068,8 @@ def run_simulation(portfolio_json: str) -> str:
 
 
 # Create Gradio interface
-with gr.Blocks(title="Regulatory Impact Analyzer", theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 📊 Regulatory Impact Analyzer")
+with gr.Blocks(title="ComplianceVision", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 📊 ComplianceVision")
     gr.Markdown(
         "Analyze regulatory documents and evaluate their financial impact on S&P 500 companies."
     )
